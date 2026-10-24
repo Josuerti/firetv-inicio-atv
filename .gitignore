@@ -1,0 +1,15 @@
+# Compilación
+build/
+*.apk
+*.idsig
+
+# Llave de firma y su contraseña: NUNCA al repo
+keystore/
+*.jks
+
+# Datos de la TV (ajustes, números de serie, red) y capturas sin censurar
+backup/
+shots/
+
+# APKs de terceros descargados
+apks/
