@@ -9,12 +9,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
-import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Outline;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.StateListDrawable;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.Uri;
@@ -54,40 +52,71 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Pantalla de inicio estilo Apple TV: reloj, pastillas, título con resplandor, dock y cuadrícula. */
+/**
+ * Pantalla de inicio estilo tvOS: pestañas Inicio / Apps / Ajustes, saludo, tarjetas de
+ * Recientes y Clima, y dock. Tema claro u oscuro.
+ */
 public class HomeActivity extends Activity {
     static final String EXTRA_FROM_HOME_KEY = "from_home_key";
-    static final int COLS = 5;
+    static final int DOCK_MAX = 6, GRID_COLS = 6, RECENT_MAX = 3;
     static final String[] DEFAULT_DOCK = {
             "com.netflix.ninja",
             "com.disney.disneyplus",
             "com.amazon.firetv.youtube",
             "com.crunchyroll.crunchyroid",
-            "com.stremio.one"};
+            "com.stremio.one",
+            "com.cbs.ca"};
     static final Locale ES = new Locale("es", "ES");
+    static final int PAGE_HOME = 0, PAGE_APPS = 1, PAGE_SETTINGS = 2;
+    static final int KIND_DOCK = 0, KIND_RECENT = 1, KIND_GRID = 2;
+
+    /** Colores de cada tema. */
+    private static final class Palette {
+        final boolean light;
+        final int bgTop, bgBottom, card, text, sub, tabBar, tabSel, tabText, glowAlpha;
+
+        Palette(boolean light) {
+            this.light = light;
+            bgTop = light ? 0xFFF4F5F8 : 0xFF1C1C1E;
+            bgBottom = light ? 0xFFD9DCE3 : 0xFF000000;
+            card = light ? 0xB3FFFFFF : 0x1FFFFFFF;
+            text = light ? 0xFF1C1C1E : 0xFFFFFFFF;
+            sub = light ? 0xFF6E6E73 : 0xFF98989D;
+            tabBar = light ? 0x8CFFFFFF : 0x1FFFFFFF;
+            tabSel = light ? 0xFFFFFFFF : 0x40FFFFFF;
+            tabText = light ? 0xFF3A3A3C : 0xFFEBEBF0;
+            glowAlpha = light ? 0x38 : 0x5C;
+        }
+    }
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler ui = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
+    private Palette pal;
     private float dp;
-    private int tileW, tileH, screenW, screenH;
+    private int screenW;
 
-    private FrameLayout root, header;
-    private Scroller scroll;
-    private LinearLayout content, dock, grid, recentRow;
-    private TextView greeting, clock, date, weather, title, wifiPill, gridTitle, recentTitle, dockHint;
-    private long weatherAt;
     private GradientDrawable glowBg;
-    private int glowColor = 0xFF3A3A3C;
+    private int glowColor = 0xFF8E8E93;
     private ValueAnimator glowAnim;
+
+    private final TextView[] tabs = new TextView[3];
+    private final View[] pages = new View[3];
+    private int page = PAGE_HOME;
+
+    private TextView clock, greeting, date, wifiRow, themeRow, hiddenRow, recentEmpty;
+    private LinearLayout dock, recentRow, appsGrid, settingsList;
+    private ScrollView appsScroll;
+    // Tarjeta de clima
+    private TextView wCity, wIcon, wTemp, wDesc;
+    private final TextView[][] wHours = new TextView[Weather.HOURS][3];
+    private long weatherAt;
 
     private final List<AppEntry> all = new ArrayList<>();
     private final List<AppEntry> dockApps = new ArrayList<>();
-    private final List<AppEntry> gridApps = new ArrayList<>();
-    private final List<String> recentPkgs = new ArrayList<>();
+    private final List<Recents.Item> recents = new ArrayList<>();
     private String pendingFocusPkg;
     private boolean pendingFocusDock = true;
-    private boolean receiversOn;
     private boolean released;
 
     // ---------------------------------------------------------------- ciclo de vida
@@ -97,12 +126,9 @@ public class HomeActivity extends Activity {
         super.onCreate(b);
         dp = getResources().getDisplayMetrics().density;
         screenW = getResources().getDisplayMetrics().widthPixels;
-        screenH = getResources().getDisplayMetrics().heightPixels;
-        tileW = px(144);
-        tileH = px(81);
         prefs = getSharedPreferences("atv", MODE_PRIVATE);
-        buildChrome();
-        setContentView(root);
+        pal = new Palette(!"dark".equals(prefs.getString("theme", "light")));
+        setContentView(buildChrome());
 
         IntentFilter pf = new IntentFilter();
         pf.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -118,17 +144,8 @@ public class HomeActivity extends Activity {
         sf.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
         sf.addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION);
         registerReceiver(sysReceiver, sf);
-        receiversOn = true;
+        showPage(PAGE_HOME);
         reload();
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        updateClock();
-        updateWifi();
-        refreshWeather();
-        if (!released && !all.isEmpty()) refreshRecents();
     }
 
     @Override
@@ -140,6 +157,16 @@ public class HomeActivity extends Activity {
         }
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateClock();
+        updateWifi();
+        refreshWeather();
+        if (!all.isEmpty()) refreshRecents();
+        ensureHomeService();
+    }
+
     /** Al irnos a segundo plano soltamos banners e iconos: la RAM es para la app que estás viendo. */
     @Override
     public void onTrimMemory(int level) {
@@ -147,33 +174,28 @@ public class HomeActivity extends Activity {
         if (level >= TRIM_MEMORY_UI_HIDDEN && !released) {
             released = true;
             dock.removeAllViews();
-            grid.removeAllViews();
             recentRow.removeAllViews();
+            appsGrid.removeAllViews();
             all.clear();
             dockApps.clear();
-            gridApps.clear();
         }
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        // Botón Inicio estando ya aquí: volver arriba, al primer icono del dock.
-        goTop();
+        goHome(); // botón Inicio estando ya aquí
     }
 
     @Override
     public void onBackPressed() {
-        // Somos la pantalla de inicio: Atrás solo nos devuelve al dock.
-        goTop();
+        goHome(); // somos la pantalla de inicio: Atrás solo vuelve al dock
     }
 
     @Override
     protected void onDestroy() {
-        if (receiversOn) {
-            unregisterReceiver(pkgReceiver);
-            unregisterReceiver(sysReceiver);
-        }
+        unregisterReceiver(pkgReceiver);
+        unregisterReceiver(sysReceiver);
         io.shutdownNow();
         super.onDestroy();
     }
@@ -194,196 +216,321 @@ public class HomeActivity extends Activity {
         }
     };
 
-    // ---------------------------------------------------------------- estructura fija
+    // ---------------------------------------------------------------- estructura
 
-    private void buildChrome() {
-        root = new FrameLayout(this);
-        root.setBackgroundColor(Color.BLACK);
+    private View buildChrome() {
+        FrameLayout root = new FrameLayout(this);
+        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{pal.bgTop, pal.bgBottom}));
 
         glowBg = new GradientDrawable();
         glowBg.setGradientType(GradientDrawable.RADIAL_GRADIENT);
-        glowBg.setGradientRadius(px(640));
+        glowBg.setGradientRadius(px(620));
         glowBg.setGradientCenter(0.5f, 1.05f);
         applyGlow(glowColor);
         View glow = new View(this);
         glow.setBackground(glowBg);
         root.addView(glow, new FrameLayout.LayoutParams(-1, -1));
 
-        scroll = new Scroller(this);
-        scroll.setVerticalScrollBarEnabled(false);
-        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        scroll.setFillViewport(true);
-        scroll.setClipChildren(false);
-        root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        // Barra superior: pestañas centradas y reloj a la derecha.
+        LinearLayout tabBar = new LinearLayout(this);
+        tabBar.setPadding(px(5), px(5), px(5), px(5));
+        tabBar.setBackground(round(pal.tabBar, px(24)));
+        tabBar.setClipChildren(false);
+        String[] names = {"Inicio", "Apps", "Ajustes"};
+        for (int i = 0; i < 3; i++) {
+            final int p = i;
+            TextView t = text(15, pal.tabText, "sans-serif-medium");
+            t.setText(names[i]);
+            t.setPadding(px(20), px(7), px(20), px(7));
+            t.setFocusable(true);
+            t.setOnFocusChangeListener((v, has) -> {
+                v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).setDuration(150).start();
+                if (has) showPage(p);
+                styleTabs();
+            });
+            t.setOnKeyListener((v, code, ev) -> {
+                if (code == KeyEvent.KEYCODE_DPAD_DOWN && ev.getAction() == KeyEvent.ACTION_DOWN) {
+                    View first = pageFirst(page);
+                    if (first != null) first.requestFocus();
+                    return true;
+                }
+                return false;
+            });
+            t.setOnClickListener(v -> {
+                View first = pageFirst(p);
+                if (first != null) first.requestFocus();
+            });
+            tabs[i] = t;
+            tabBar.addView(t);
+        }
+        FrameLayout.LayoutParams tbl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        tbl.topMargin = px(20);
+        root.addView(tabBar, tbl);
 
-        content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setClipChildren(false);
-        content.setClipToPadding(false);
-        content.setPadding(0, 0, 0, px(70));
-        scroll.addView(content, new FrameLayout.LayoutParams(-1, -2));
+        clock = text(22, pal.text, "sans-serif-medium");
+        FrameLayout.LayoutParams ckl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
+        ckl.setMargins(0, px(26), px(52), 0);
+        root.addView(clock, ckl);
 
-        int dockBandH = tileH + px(36);
-        header = new FrameLayout(this);
-        header.setClipChildren(false);
-        content.addView(header, new LinearLayout.LayoutParams(-1, screenH - dockBandH - px(34)));
+        pages[PAGE_HOME] = buildHomePage();
+        pages[PAGE_APPS] = buildAppsPage();
+        pages[PAGE_SETTINGS] = buildSettingsPage();
+        for (View p : pages) root.addView(p, new FrameLayout.LayoutParams(-1, -1));
+        return root;
+    }
 
-        // Arriba a la izquierda: saludo, reloj grande y fino, fecha.
-        LinearLayout clockBox = new LinearLayout(this);
-        clockBox.setOrientation(LinearLayout.VERTICAL);
-        greeting = text(17, 0xFFB8B8BD, "sans-serif-light");
-        clock = text(78, Color.WHITE, "sans-serif-thin");
-        clock.setIncludeFontPadding(false);
-        clock.setLetterSpacing(-0.02f);
-        date = text(17, 0xFF8E8E93, "sans-serif");
-        weather = text(17, 0xFFB8B8BD, "sans-serif-light");
-        weather.setVisibility(View.GONE);
-        clockBox.addView(greeting);
-        clockBox.addView(clock);
-        clockBox.addView(date);
-        LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(-2, -2);
-        wl.topMargin = px(10);
-        clockBox.addView(weather, wl);
-        FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
-        cl.setMargins(px(56), px(30), 0, 0);
-        header.addView(clockBox, cl);
+    private View buildHomePage() {
+        FrameLayout home = new FrameLayout(this);
+        home.setClipChildren(false);
 
-        // Arriba a la derecha: pastillas de cristal.
-        LinearLayout pills = new LinearLayout(this);
-        pills.setOrientation(LinearLayout.HORIZONTAL);
-        pills.setClipChildren(false);
-        wifiPill = pill("Wi-Fi", v -> openWifi());
-        pills.addView(wifiPill);
-        pills.addView(pill("Inicio Amazon", v -> openAmazonHome()));
-        pills.addView(pill("Ajustes", v -> startSafe(new Intent(Settings.ACTION_SETTINGS))));
-        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
-        pl.setMargins(0, px(38), px(52), 0);
-        header.addView(pills, pl);
+        LinearLayout hello = new LinearLayout(this);
+        hello.setOrientation(LinearLayout.VERTICAL);
+        greeting = text(40, pal.text, "sans-serif-medium");
+        date = text(16, pal.sub, "sans-serif");
+        hello.addView(greeting);
+        hello.addView(date);
+        FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+        hl.setMargins(px(56), px(72), 0, 0);
+        home.addView(hello, hl);
 
-        // Abajo a la izquierda: nombre de la app enfocada en el dock, con resplandor de su color.
-        title = text(36, Color.WHITE, "sans-serif-light");
-        title.setSingleLine(true);
-        title.setEllipsize(TextUtils.TruncateAt.END);
-        FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.START);
-        tl.setMargins(sidePad() + px(10), 0, px(56), px(10));
-        header.addView(title, tl);
+        // Tarjetas: Recientes (izquierda) y Clima (derecha).
+        LinearLayout cards = new LinearLayout(this);
+        cards.setClipChildren(false);
+        FrameLayout.LayoutParams cdl = new FrameLayout.LayoutParams(-1, px(196), Gravity.TOP);
+        cdl.setMargins(px(48), px(152), px(48), 0);
+        home.addView(cards, cdl);
 
-        // Banda del dock.
+        LinearLayout recentCard = card();
+        recentCard.setOrientation(LinearLayout.VERTICAL);
+        recentCard.setClipChildren(false);
+        TextView rt = text(13, pal.sub, "sans-serif-medium");
+        rt.setText("Recientes");
+        recentCard.addView(rt);
+        recentRow = new LinearLayout(this);
+        recentRow.setClipChildren(false);
+        recentRow.setClipToPadding(false);
+        LinearLayout.LayoutParams rrl = new LinearLayout.LayoutParams(-1, -2);
+        rrl.topMargin = px(10);
+        recentCard.addView(recentRow, rrl);
+        recentEmpty = text(14, pal.sub, "sans-serif");
+        recentEmpty.setText("Las apps que abras aparecerán aquí.");
+        recentCard.addView(recentEmpty);
+        cards.addView(recentCard, new LinearLayout.LayoutParams(0, -1, 1f));
+
+        LinearLayout weatherCard = card();
+        weatherCard.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout wTop = new LinearLayout(this);
+        LinearLayout wLeft = new LinearLayout(this);
+        wLeft.setOrientation(LinearLayout.VERTICAL);
+        wCity = text(13, pal.sub, "sans-serif-medium");
+        wCity.setText("Clima");
+        wTemp = text(42, pal.text, "sans-serif-light");
+        wTemp.setIncludeFontPadding(false);
+        wTemp.setText("--°");
+        wLeft.addView(wCity);
+        wLeft.addView(wTemp);
+        wTop.addView(wLeft, new LinearLayout.LayoutParams(0, -2, 1f));
+        LinearLayout wRight = new LinearLayout(this);
+        wRight.setOrientation(LinearLayout.VERTICAL);
+        wRight.setGravity(Gravity.END);
+        wIcon = text(28, pal.text, "sans-serif");
+        wDesc = text(12, pal.sub, "sans-serif");
+        wDesc.setGravity(Gravity.END);
+        wRight.addView(wIcon);
+        wRight.addView(wDesc);
+        wTop.addView(wRight);
+        weatherCard.addView(wTop);
+        View line = new View(this);
+        line.setBackgroundColor(pal.light ? 0x1A000000 : 0x1FFFFFFF);
+        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-1, Math.max(1, px(1)));
+        ll.setMargins(0, px(10), 0, px(8));
+        weatherCard.addView(line, ll);
+        LinearLayout hours = new LinearLayout(this);
+        for (int i = 0; i < Weather.HOURS; i++) {
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setGravity(Gravity.CENTER_HORIZONTAL);
+            wHours[i][0] = text(11, pal.sub, "sans-serif-medium");
+            wHours[i][1] = text(16, pal.text, "sans-serif");
+            wHours[i][2] = text(12, pal.text, "sans-serif-medium");
+            for (TextView t : wHours[i]) col.addView(t);
+            hours.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+        }
+        weatherCard.addView(hours);
+        LinearLayout.LayoutParams wcl = new LinearLayout.LayoutParams(px(300), -1);
+        wcl.leftMargin = px(16);
+        cards.addView(weatherCard, wcl);
+
+        // Dock.
         dock = new LinearLayout(this);
-        dock.setOrientation(LinearLayout.HORIZONTAL);
         dock.setGravity(Gravity.CENTER);
         dock.setClipChildren(false);
         dock.setClipToPadding(false);
-        dock.setPadding(px(8), px(18), px(8), px(18));
-        dock.setBackground(round(0x1FFFFFFF, px(28)));
-        LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-1, dockBandH);
-        dl.setMargins(px(48), 0, px(48), 0);
-        content.addView(dock, dl);
+        dock.setPadding(px(10), px(14), px(10), px(4));
+        dock.setBackground(round(pal.card, px(28)));
+        FrameLayout.LayoutParams dl = new FrameLayout.LayoutParams(-1, px(118), Gravity.BOTTOM);
+        dl.setMargins(px(48), 0, px(48), px(26));
+        home.addView(dock, dl);
+        return home;
+    }
 
-        dockHint = text(15, 0xFF8E8E93, "sans-serif");
-        dockHint.setText("Pulsa el botón Menú del mando sobre una app de abajo para añadirla al dock");
+    private View buildAppsPage() {
+        appsScroll = new ScrollView(this);
+        appsScroll.setVerticalScrollBarEnabled(false);
+        appsScroll.setClipChildren(false);
+        appsScroll.setClipToPadding(false);
+        appsScroll.setPadding(0, px(84), 0, 0);
+        appsGrid = new LinearLayout(this);
+        appsGrid.setOrientation(LinearLayout.VERTICAL);
+        appsGrid.setClipChildren(false);
+        appsGrid.setClipToPadding(false);
+        appsGrid.setPadding(0, px(16), 0, px(40));
+        appsScroll.addView(appsGrid, new FrameLayout.LayoutParams(-1, -2));
+        return appsScroll;
+    }
 
-        // Recientes: las últimas apps abiertas (solo aparece si hay permiso de acceso al uso).
-        recentTitle = text(19, 0xFF8E8E93, "sans-serif-medium");
-        recentTitle.setText("Recientes");
-        recentTitle.setVisibility(View.GONE);
-        LinearLayout.LayoutParams rtl = new LinearLayout.LayoutParams(-2, -2);
-        rtl.setMargins(sidePad() + px(10), px(40), 0, px(16));
-        content.addView(recentTitle, rtl);
-        recentRow = gridRow();
-        content.addView(recentRow, recentRow.getLayoutParams());
+    private View buildSettingsPage() {
+        ScrollView s = new ScrollView(this);
+        s.setVerticalScrollBarEnabled(false);
+        s.setClipChildren(false);
+        s.setPadding(0, px(96), 0, 0);
+        settingsList = new LinearLayout(this);
+        settingsList.setOrientation(LinearLayout.VERTICAL);
+        settingsList.setGravity(Gravity.CENTER_HORIZONTAL);
+        settingsList.setClipChildren(false);
+        settingsList.setClipToPadding(false);
+        settingsList.setPadding(0, px(8), 0, px(40));
+        s.addView(settingsList, new FrameLayout.LayoutParams(-1, -2));
 
-        gridTitle = text(19, 0xFF8E8E93, "sans-serif-medium");
-        gridTitle.setText("Apps");
-        LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(-2, -2);
-        gl.setMargins(sidePad() + px(10), px(26), 0, px(16));
-        content.addView(gridTitle, gl);
+        wifiRow = settingRow("Wi-Fi", v -> {
+            if (!startSafe(new Intent(Settings.ACTION_WIFI_SETTINGS))) startSafe(new Intent(Settings.ACTION_SETTINGS));
+        });
+        settingRow("Ajustes de Fire TV", v -> startSafe(new Intent(Settings.ACTION_SETTINGS)));
+        settingRow("Abrir el inicio de Amazon", v -> openAmazonHome());
+        themeRow = settingRow(pal.light ? "Tema: claro" : "Tema: oscuro", v -> {
+            prefs.edit().putString("theme", pal.light ? "dark" : "light").apply();
+            recreate();
+        });
+        hiddenRow = settingRow("Mostrar apps ocultas", v -> {
+            prefs.edit().remove("hidden").apply();
+            toast("Apps ocultas visibles otra vez");
+            rebuild();
+        });
+        TextView about = text(13, pal.sub, "sans-serif");
+        about.setText("Inicio ATV 2.0 · github.com/Josuerti/firetv-inicio-atv");
+        LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-2, -2);
+        al.topMargin = px(18);
+        settingsList.addView(about, al);
+        return s;
+    }
 
-        grid = new LinearLayout(this);
-        grid.setOrientation(LinearLayout.VERTICAL);
-        grid.setClipChildren(false);
-        grid.setClipToPadding(false);
-        content.addView(grid, new LinearLayout.LayoutParams(-1, -2));
+    private TextView settingRow(String label, View.OnClickListener click) {
+        TextView t = text(17, pal.text, "sans-serif-medium");
+        t.setText(label);
+        t.setGravity(Gravity.CENTER_VERTICAL);
+        t.setPadding(px(24), 0, px(24), 0);
+        t.setFocusable(true);
+        t.setBackground(round(pal.card, px(16)));
+        t.setOnFocusChangeListener((v, has) -> {
+            v.setBackground(round(has ? (pal.light ? 0xFFFFFFFF : 0x4DFFFFFF) : pal.card, px(16)));
+            v.animate().scaleX(has ? 1.04f : 1f).scaleY(has ? 1.04f : 1f)
+                    .translationZ(has ? px(8) : 0).setDuration(150).start();
+        });
+        t.setOnKeyListener((v, code, ev) -> {
+            if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN
+                    && settingsList.indexOfChild(v) == 0) {
+                tabs[PAGE_SETTINGS].requestFocus();
+                return true;
+            }
+            return false;
+        });
+        t.setOnClickListener(click);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(px(560), px(56));
+        lp.bottomMargin = px(12);
+        settingsList.addView(t, lp);
+        return t;
+    }
+
+    // ---------------------------------------------------------------- páginas y foco
+
+    private void showPage(int p) {
+        page = p;
+        for (int i = 0; i < 3; i++) pages[i].setVisibility(i == p ? View.VISIBLE : View.GONE);
+        styleTabs();
+    }
+
+    private void styleTabs() {
+        for (int i = 0; i < 3; i++) {
+            boolean sel = i == page;
+            tabs[i].setBackground(sel ? round(pal.tabSel, px(20)) : null);
+            tabs[i].setTextColor(sel ? pal.text : pal.tabText);
+            tabs[i].setTranslationZ(sel && pal.light ? px(3) : 0);
+        }
+    }
+
+    private View pageFirst(int p) {
+        if (p == PAGE_HOME) {
+            if (recentRow.getChildCount() > 0) return recentRow.getChildAt(0).findViewWithTag(TAG_CARD);
+            return dock.getChildCount() > 0 ? dock.getChildAt(0).findViewWithTag(TAG_CARD) : null;
+        }
+        if (p == PAGE_APPS) {
+            if (appsGrid.getChildCount() == 0) return null;
+            View row = appsGrid.getChildAt(0);
+            return ((LinearLayout) row).getChildCount() > 0 ? ((LinearLayout) row).getChildAt(0).findViewWithTag(TAG_CARD) : null;
+        }
+        return settingsList.getChildAt(0);
+    }
+
+    private void goHome() {
+        showPage(PAGE_HOME);
+        View f = getCurrentFocus();
+        if (f == null || !(f.getTag(R_KIND) instanceof Integer) || (Integer) f.getTag(R_KIND) != KIND_DOCK) {
+            if (dock.getChildCount() > 0) {
+                View c = dock.getChildAt(0).findViewWithTag(TAG_CARD);
+                if (c != null) c.requestFocus();
+            }
+        }
     }
 
     // ---------------------------------------------------------------- apps
 
+    /** Tag para encontrar el recuadro enfocable dentro de cada columna. */
+    private static final Object TAG_CARD = new Object();
+    private static final int R_KIND = 0x7f0f0001, R_APP = 0x7f0f0002;
+
     private void reload() {
         io.execute(() -> {
             final List<AppEntry> list = AppEntry.query(this);
-            final List<String> rec = Recents.query(this);
+            final List<Recents.Item> rec = Recents.query(this);
             ui.post(() -> {
                 all.clear();
                 all.addAll(list);
-                recentPkgs.clear();
-                recentPkgs.addAll(rec);
+                recents.clear();
+                recents.addAll(rec);
                 rebuild();
             });
         });
     }
 
-    /** Al volver de una app solo cambia la fila de recientes: no hace falta recargar todo. */
     private void refreshRecents() {
         io.execute(() -> {
-            final List<String> rec = Recents.query(this);
+            final List<Recents.Item> rec = Recents.query(this);
             ui.post(() -> {
-                if (rec.equals(recentPkgs)) return;
-                recentPkgs.clear();
-                recentPkgs.addAll(rec);
+                if (rec.equals(recents)) return;
+                recents.clear();
+                recents.addAll(rec);
                 buildRecents();
             });
         });
     }
 
-    private void buildRecents() {
-        recentRow.removeAllViews();
-        Set<String> hidden = hidden();
-        for (String p : recentPkgs) {
-            AppEntry a = findApp(p);
-            if (a == null || hidden.contains(p)) continue;
-            recentRow.addView(makeTile(a, false));
-            if (recentRow.getChildCount() == COLS) break;
-        }
-        int vis = recentRow.getChildCount() == 0 ? View.GONE : View.VISIBLE;
-        recentRow.setVisibility(vis);
-        recentTitle.setVisibility(vis);
-    }
-
-    private void refreshWeather() {
-        long now = System.currentTimeMillis();
-        if (now - weatherAt < 30 * 60 * 1000L) return;
-        weatherAt = now;
-        io.execute(() -> {
-            try {
-                final Weather w = Weather.fetch();
-                ui.post(() -> {
-                    weather.setText(w.line());
-                    weather.setVisibility(View.VISIBLE);
-                });
-            } catch (Exception e) {
-                weatherAt = 0; // sin red: se reintenta en el siguiente minuto
-            }
-        });
-    }
-
-    private LinearLayout gridRow() {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setClipChildren(false);
-        row.setClipToPadding(false);
-        row.setPadding(sidePad(), 0, 0, 0);
-        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, -2);
-        rl.bottomMargin = px(14);
-        row.setLayoutParams(rl);
-        return row;
-    }
-
     private void rebuild() {
         if (pendingFocusPkg == null) {
             View f = getCurrentFocus();
-            if (f != null && f.getTag() instanceof AppEntry) {
-                pendingFocusPkg = ((AppEntry) f.getTag()).pkg;
-                pendingFocusDock = f.getParent() == dock;
+            if (f != null && f.getTag(R_APP) instanceof AppEntry) {
+                pendingFocusPkg = ((AppEntry) f.getTag(R_APP)).pkg;
+                pendingFocusDock = Integer.valueOf(KIND_DOCK).equals(f.getTag(R_KIND));
             }
         }
         Map<String, AppEntry> byPkg = new HashMap<>();
@@ -393,47 +540,73 @@ public class HomeActivity extends Activity {
         dockApps.clear();
         for (String p : dockPkgs()) {
             AppEntry a = byPkg.get(p);
-            if (a != null && !dockApps.contains(a) && dockApps.size() < COLS) dockApps.add(a);
+            if (a != null && !dockApps.contains(a) && dockApps.size() < DOCK_MAX) dockApps.add(a);
         }
-        gridApps.clear();
-        for (AppEntry a : all) if (!dockApps.contains(a) && !hidden.contains(a.pkg)) gridApps.add(a);
-
         dock.removeAllViews();
-        for (AppEntry a : dockApps) dock.addView(makeTile(a, true));
-        if (dockApps.isEmpty()) dock.addView(dockHint);
+        for (AppEntry a : dockApps) dock.addView(makeTile(a, KIND_DOCK, px(124), px(70), null));
+        if (dockApps.isEmpty()) {
+            TextView hint = text(15, pal.sub, "sans-serif");
+            hint.setText("Ve a Apps y pulsa Menú ☰ sobre una app para añadirla aquí");
+            dock.addView(hint);
+        }
 
         buildRecents();
 
-        grid.removeAllViews();
+        appsGrid.removeAllViews();
+        int side = Math.max(0, (screenW - GRID_COLS * (px(128) + px(20))) / 2);
         LinearLayout row = null;
-        for (int i = 0; i < gridApps.size(); i++) {
-            if (i % COLS == 0) {
-                row = gridRow();
-                grid.addView(row);
+        int n = 0;
+        for (AppEntry a : all) {
+            if (hidden.contains(a.pkg)) continue;
+            if (n % GRID_COLS == 0) {
+                row = new LinearLayout(this);
+                row.setClipChildren(false);
+                row.setClipToPadding(false);
+                row.setPadding(side, 0, 0, 0);
+                LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, -2);
+                rl.bottomMargin = px(10);
+                appsGrid.addView(row, rl);
             }
-            row.addView(makeTile(gridApps.get(i), false));
+            row.addView(makeTile(a, KIND_GRID, px(128), px(72), null));
+            n++;
         }
-        gridTitle.setVisibility(gridApps.isEmpty() ? View.GONE : View.VISIBLE);
+        hiddenRow.setText(hidden.isEmpty() ? "No hay apps ocultas" : "Mostrar apps ocultas (" + hidden.size() + ")");
+        hiddenRow.setEnabled(!hidden.isEmpty());
 
         View target = findTile(pendingFocusPkg, pendingFocusDock);
-        if (target == null) target = firstTile();
         pendingFocusPkg = null;
+        if (target == null && page == PAGE_HOME && dock.getChildCount() > 0) target = dock.getChildAt(0).findViewWithTag(TAG_CARD);
         if (target != null) target.requestFocus();
     }
 
-    private View makeTile(final AppEntry a, final boolean inDock) {
+    private void buildRecents() {
+        recentRow.removeAllViews();
+        Set<String> hidden = hidden();
+        for (Recents.Item it : recents) {
+            AppEntry a = findApp(it.pkg);
+            if (a == null || hidden.contains(it.pkg)) continue;
+            recentRow.addView(makeTile(a, KIND_RECENT, px(150), px(84), Recents.ago(it.time)));
+            if (recentRow.getChildCount() == RECENT_MAX) break;
+        }
+        boolean empty = recentRow.getChildCount() == 0;
+        recentRow.setVisibility(empty ? View.GONE : View.VISIBLE);
+        recentEmpty.setVisibility(empty ? View.VISIBLE : View.GONE);
+    }
+
+    private View makeTile(final AppEntry a, final int kind, int w, int h, String subtitle) {
         final FrameLayout card = new FrameLayout(this);
-        card.setTag(a);
+        card.setTag(TAG_CARD);
+        card.setTag(R_APP, a);
+        card.setTag(R_KIND, kind);
         card.setFocusable(true);
         card.setClipToOutline(true);
-        final int radius = px(10);
+        final int radius = px(12);
         card.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View v, Outline o) {
                 o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
             }
         });
-
         if (a.banner != null) {
             ImageView img = new ImageView(this);
             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -444,11 +617,9 @@ public class HomeActivity extends Activity {
             ImageView img = new ImageView(this);
             img.setScaleType(ImageView.ScaleType.FIT_CENTER);
             img.setImageDrawable(a.icon);
-            int s = Math.round(tileH * 0.62f);
+            int s = Math.round(h * 0.62f);
             card.addView(img, new FrameLayout.LayoutParams(s, s, Gravity.CENTER));
         }
-
-        // Brillo de cristal + borde fino: solo visibles con foco.
         GradientDrawable sheenBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 new int[]{0x40FFFFFF, 0x0AFFFFFF, 0x00FFFFFF});
         sheenBg.setCornerRadius(radius);
@@ -458,76 +629,61 @@ public class HomeActivity extends Activity {
         sheen.setAlpha(0f);
         card.addView(sheen, new FrameLayout.LayoutParams(-1, -1));
 
-        final TextView label;
-        View tile;
-        if (inDock) {
-            label = null;
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(tileW, tileH);
-            lp.setMargins(px(10), 0, px(10), 0);
-            card.setLayoutParams(lp);
-            tile = card;
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setClipChildren(false);
+        col.addView(card, new LinearLayout.LayoutParams(w, h));
+        final TextView label = text(13, pal.text, "sans-serif-medium");
+        label.setText(a.label);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(w, -2);
+        ll.topMargin = px(kind == KIND_DOCK ? 8 : 10);
+        col.addView(label, ll);
+        final boolean labelAlways = kind == KIND_RECENT;
+        if (labelAlways) {
+            TextView sub = text(11, pal.sub, "sans-serif");
+            sub.setText(subtitle);
+            col.addView(sub);
         } else {
-            LinearLayout col = new LinearLayout(this);
-            col.setOrientation(LinearLayout.VERTICAL);
-            col.setClipChildren(false);
-            col.addView(card, new LinearLayout.LayoutParams(tileW, tileH));
-            label = text(13, 0xFFEDEDED, "sans-serif");
-            label.setText(a.label);
             label.setGravity(Gravity.CENTER_HORIZONTAL);
-            label.setSingleLine(true);
-            label.setEllipsize(TextUtils.TruncateAt.END);
             label.setAlpha(0f);
-            LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(tileW, -2);
-            ll.topMargin = px(10);
-            col.addView(label, ll);
-            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
-            cp.setMargins(px(10), 0, px(10), 0);
-            col.setLayoutParams(cp);
-            tile = col;
         }
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
+        int gap = kind == KIND_DOCK ? px(7) : px(10);
+        cp.setMargins(kind == KIND_RECENT ? 0 : gap, 0, kind == KIND_RECENT ? px(14) : gap, 0);
+        col.setLayoutParams(cp);
 
         card.setOnFocusChangeListener((v, has) -> {
-            float s = has ? 1.11f : 1f;
-            v.animate().scaleX(s).scaleY(s).translationZ(has ? px(16) : 0)
+            float s = has ? 1.1f : 1f;
+            v.animate().scaleX(s).scaleY(s).translationZ(has ? px(14) : 0)
                     .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
             sheen.animate().alpha(has ? 1f : 0f).setDuration(170).start();
-            if (label != null) {
-                label.animate().alpha(has ? 1f : 0f).translationY(has ? px(6) : 0).setDuration(170).start();
-            }
-            if (has) onAppFocused(a, inDock, v);
+            if (!labelAlways) label.animate().alpha(has ? 1f : 0f).translationY(has ? px(4) : 0).setDuration(170).start();
+            if (has) animateGlow(a.glow);
         });
         card.setOnClickListener(v -> startSafe(a.launchIntent()));
         card.setOnLongClickListener(v -> {
-            showMenu(a, inDock);
+            showMenu(a, kind == KIND_DOCK);
             return true;
         });
         card.setOnKeyListener((v, code, ev) -> {
             if (code == KeyEvent.KEYCODE_MENU) {
-                if (ev.getAction() == KeyEvent.ACTION_UP) showMenu(a, inDock);
+                if (ev.getAction() == KeyEvent.ACTION_UP) showMenu(a, kind == KIND_DOCK);
                 return true;
+            }
+            if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN) {
+                boolean top = kind == KIND_RECENT
+                        || (kind == KIND_DOCK && recentRow.getChildCount() == 0)
+                        || (kind == KIND_GRID && appsGrid.indexOfChild((View) col.getParent()) == 0);
+                if (top) {
+                    tabs[page].requestFocus();
+                    return true;
+                }
             }
             return false;
         });
-        return tile;
-    }
-
-    private void onAppFocused(AppEntry a, boolean inDock, View card) {
-        if (inDock) {
-            if (!a.label.contentEquals(title.getText())) {
-                title.setText(a.label);
-                title.setAlpha(0.3f);
-            }
-            title.animate().alpha(1f).setDuration(220).start();
-            title.setShadowLayer(px(22), 0, 0, (a.glow & 0x00FFFFFF) | 0xAA000000);
-            scroll.smoothScrollTo(0, 0);
-        } else {
-            title.animate().alpha(0f).setDuration(150).start();
-            View row = (View) card.getParent().getParent();
-            int rowBottom = row.getBottom() + (row.getParent() == grid ? grid.getTop() : 0);
-            int minY = dock.getTop() - px(26);
-            scroll.smoothScrollTo(0, Math.max(minY, rowBottom + px(56) - scroll.getHeight()));
-        }
-        animateGlow(a.glow);
+        return col;
     }
 
     private void showMenu(final AppEntry a, boolean inDock) {
@@ -548,18 +704,20 @@ public class HomeActivity extends Activity {
                 acts.add(() -> { Collections.swap(d, i, i + 1); saveDock(d); refocus(a.pkg, true); });
             }
             labels.add("Quitar del dock");
-            acts.add(() -> { d.remove(a.pkg); saveDock(d); refocus(a.pkg, false); });
+            acts.add(() -> { d.remove(a.pkg); saveDock(d); refocus(null, true); });
         } else {
-            labels.add("Añadir al dock");
-            acts.add(() -> {
-                if (d.size() >= COLS) {
-                    toast("El dock está lleno (máximo " + COLS + "). Quita una app primero.");
-                } else {
-                    d.add(a.pkg);
-                    saveDock(d);
-                    refocus(a.pkg, true);
-                }
-            });
+            if (i < 0) {
+                labels.add("Añadir al dock");
+                acts.add(() -> {
+                    if (d.size() >= DOCK_MAX) {
+                        toast("El dock está lleno (máximo " + DOCK_MAX + "). Quita una app primero.");
+                    } else {
+                        d.add(a.pkg);
+                        saveDock(d);
+                        refocus(a.pkg, false);
+                    }
+                });
+            }
             labels.add("Ocultar app");
             acts.add(() -> {
                 hidden.add(a.pkg);
@@ -569,13 +727,10 @@ public class HomeActivity extends Activity {
         }
         labels.add("Información de la app");
         acts.add(() -> startSafe(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.fromParts("package", a.pkg, null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
-        if (!hidden.isEmpty()) {
-            labels.add("Mostrar apps ocultas (" + hidden.size() + ")");
-            acts.add(() -> { prefs.edit().remove("hidden").apply(); refocus(a.pkg, inDock); });
-        }
+                Uri.fromParts("package", a.pkg, null))));
 
-        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        new AlertDialog.Builder(this, pal.light ? android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
+                : android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle(a.label)
                 .setItems(labels.toArray(new String[0]), (dlg, w) -> acts.get(w).run())
                 .show();
@@ -604,33 +759,31 @@ public class HomeActivity extends Activity {
     }
 
     private View findTile(String pkg, boolean inDock) {
-        if (pkg == null) return null;
-        View v = inDock ? dock.findViewWithTag(findApp(pkg)) : grid.findViewWithTag(findApp(pkg));
-        if (v == null) v = content.findViewWithTag(findApp(pkg));
-        return v;
+        AppEntry a = findApp(pkg);
+        if (a == null) return null;
+        View parent = inDock ? dock : (page == PAGE_APPS ? appsGrid : pages[PAGE_HOME]);
+        return findCard(parent, a);
+    }
+
+    private static View findCard(View v, AppEntry a) {
+        if (v.getTag(R_APP) == a) return v;
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                View r = findCard(g.getChildAt(i), a);
+                if (r != null) return r;
+            }
+        }
+        return null;
     }
 
     private AppEntry findApp(String pkg) {
+        if (pkg == null) return null;
         for (AppEntry a : all) if (a.pkg.equals(pkg)) return a;
         return null;
     }
 
-    private View firstTile() {
-        if (!dockApps.isEmpty()) return dock.getChildAt(0);
-        if (!gridApps.isEmpty()) return grid.findViewWithTag(gridApps.get(0));
-        return null;
-    }
-
-    private void goTop() {
-        scroll.smoothScrollTo(0, 0);
-        View f = getCurrentFocus();
-        if (f == null || f.getParent() != dock) {
-            View first = firstTile();
-            if (first != null) first.requestFocus();
-        }
-    }
-
-    // ---------------------------------------------------------------- reloj, red, acciones
+    // ---------------------------------------------------------------- reloj, clima, red
 
     private void updateClock() {
         Date now = new Date();
@@ -641,6 +794,33 @@ public class HomeActivity extends Activity {
         greeting.setText(h < 5 ? "Buenas noches" : h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches");
     }
 
+    private void refreshWeather() {
+        long now = System.currentTimeMillis();
+        if (now - weatherAt < 30 * 60 * 1000L) return;
+        weatherAt = now;
+        io.execute(() -> {
+            try {
+                final Weather w = Weather.fetch();
+                ui.post(() -> showWeather(w));
+            } catch (Exception e) {
+                weatherAt = 0; // sin red: se reintenta en el siguiente minuto
+            }
+        });
+    }
+
+    private void showWeather(Weather w) {
+        wCity.setText("➤ " + w.city);
+        wTemp.setText(w.temp + "°");
+        wIcon.setText(Weather.emoji(w.code, w.day));
+        wDesc.setText(Weather.describe(w.code) + "\nMáx " + w.max + "°  Mín " + w.min + "°");
+        for (int i = 0; i < Weather.HOURS; i++) {
+            if (w.hourLabel[i] == null) continue;
+            wHours[i][0].setText(w.hourLabel[i]);
+            wHours[i][1].setText(Weather.emoji(w.hourCode[i], w.hourDay[i]));
+            wHours[i][2].setText(w.hourTemp[i] + "°");
+        }
+    }
+
     @SuppressWarnings("deprecation")
     private void updateWifi() {
         String label;
@@ -648,25 +828,40 @@ public class HomeActivity extends Activity {
             ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
             NetworkInfo ni = cm.getActiveNetworkInfo();
             if (ni == null || !ni.isConnected()) {
-                label = "Sin conexión";
+                label = "Wi-Fi · Sin conexión";
             } else if (ni.getType() == ConnectivityManager.TYPE_WIFI) {
                 String ssid = null;
                 WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
                 WifiInfo wi = wm == null ? null : wm.getConnectionInfo();
                 if (wi != null) ssid = wi.getSSID();
                 if (ssid != null) ssid = ssid.replace("\"", "").trim();
-                label = (ssid == null || ssid.isEmpty() || ssid.contains("unknown ssid")) ? "Wi-Fi" : "Wi-Fi · " + ssid;
+                label = (ssid == null || ssid.isEmpty() || ssid.contains("unknown ssid")) ? "Wi-Fi · Conectado" : "Wi-Fi · " + ssid;
             } else {
-                label = "Ethernet";
+                label = "Ethernet · Conectado";
             }
         } catch (Exception e) {
             label = "Wi-Fi";
         }
-        wifiPill.setText(label);
+        wifiRow.setText(label);
     }
 
-    private void openWifi() {
-        if (!startSafe(new Intent(Settings.ACTION_WIFI_SETTINGS))) startSafe(new Intent(Settings.ACTION_SETTINGS));
+    // ---------------------------------------------------------------- acciones
+
+    /**
+     * Fire OS a veces apaga los servicios de accesibilidad (actualizaciones, cierre forzado).
+     * Si tenemos WRITE_SECURE_SETTINGS (concedido por adb), volvemos a encender el nuestro.
+     */
+    private void ensureHomeService() {
+        String me = getPackageName() + "/" + HomeService.class.getName();
+        try {
+            String on = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (on != null && on.contains(me)) return;
+            String value = (on == null || on.isEmpty() || on.equals("null")) ? me : on + ":" + me;
+            Settings.Secure.putString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, value);
+            Settings.Secure.putInt(getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 1);
+        } catch (SecurityException ignored) {
+            // Sin el permiso: se activa a mano en Ajustes → Accesibilidad.
+        }
     }
 
     private void openAmazonHome() {
@@ -687,7 +882,7 @@ public class HomeActivity extends Activity {
         }
     }
 
-    // ---------------------------------------------------------------- resplandor y utilidades
+    // ---------------------------------------------------------------- utilidades
 
     private void animateGlow(int target) {
         if (glowAnim != null) glowAnim.cancel();
@@ -702,33 +897,14 @@ public class HomeActivity extends Activity {
 
     private void applyGlow(int c) {
         int rgb = c & 0x00FFFFFF;
-        glowBg.setColors(new int[]{rgb | 0x5C000000, rgb | 0x1A000000, 0x00000000});
+        glowBg.setColors(new int[]{rgb | (pal.glowAlpha << 24), rgb | ((pal.glowAlpha / 4) << 24), 0x00000000});
     }
 
-    private TextView pill(String label, View.OnClickListener click) {
-        TextView t = text(15, 0xFFEDEDED, "sans-serif-medium");
-        t.setText(label);
-        t.setPadding(px(18), px(8), px(18), px(8));
-        t.setFocusable(true);
-        StateListDrawable bg = new StateListDrawable();
-        bg.addState(new int[]{android.R.attr.state_focused}, round(0xF2FFFFFF, px(20)));
-        bg.addState(new int[]{}, round(0x2EFFFFFF, px(20)));
-        t.setBackground(bg);
-        t.setTextColor(new ColorStateList(
-                new int[][]{{android.R.attr.state_focused}, {}},
-                new int[]{0xFF000000, 0xFFEDEDED}));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-        lp.leftMargin = px(10);
-        t.setLayoutParams(lp);
-        t.setOnFocusChangeListener((v, has) -> {
-            v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).setDuration(150).start();
-            if (has) {
-                title.animate().alpha(0f).setDuration(150).start();
-                scroll.smoothScrollTo(0, 0);
-            }
-        });
-        t.setOnClickListener(click);
-        return t;
+    private LinearLayout card() {
+        LinearLayout c = new LinearLayout(this);
+        c.setPadding(px(18), px(14), px(18), px(14));
+        c.setBackground(round(pal.card, px(22)));
+        return c;
     }
 
     private TextView text(float sp, int color, String family) {
@@ -746,39 +922,11 @@ public class HomeActivity extends Activity {
         return g;
     }
 
-    /** Margen izquierdo para que la cuadrícula quede alineada con los huecos del dock. */
-    private int sidePad() {
-        return Math.max(0, (screenW - COLS * (tileW + px(20))) / 2);
-    }
-
     private int px(float v) {
         return Math.round(v * dp);
     }
 
     private void toast(String s) {
         Toast.makeText(this, s, Toast.LENGTH_LONG).show();
-    }
-
-    /** ScrollView que no se mueve sola: el desplazamiento lo decide onAppFocused. */
-    private final class Scroller extends ScrollView {
-        Scroller(Context c) {
-            super(c);
-        }
-
-        @Override
-        protected int computeScrollDeltaToGetChildRectOnScreen(android.graphics.Rect r) {
-            return 0;
-        }
-
-        @Override
-        public boolean executeKeyEvent(KeyEvent event) {
-            return false;
-        }
-
-        @Override
-        protected void onScrollChanged(int l, int t, int ol, int ot) {
-            super.onScrollChanged(l, t, ol, ot);
-            if (header != null) header.setAlpha(1f - Math.min(1f, t / (float) px(220)));
-        }
     }
 }

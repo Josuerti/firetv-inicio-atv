@@ -5,14 +5,14 @@
 # Inicio ATV
 
 **Tu Fire TV con estilo Apple TV, sin anuncios y más rápida.**
-Un launcher propio de 45 KB y unos scripts que limpian Fire OS por ADB, sin root.
+Un launcher propio de unos 50 KB y unos scripts que limpian Fire OS por ADB, sin root.
 Todo se puede deshacer con un comando.
 
 [![Licencia MIT](https://img.shields.io/badge/licencia-MIT-34d399?style=flat-square)](LICENSE)
 [![Fire OS 8](https://img.shields.io/badge/Fire%20OS-8-ff9900?style=flat-square)](#-dispositivos-compatibles)
 [![Sin root](https://img.shields.io/badge/root-no%20necesario-34d399?style=flat-square)](#-cómo-funciona)
 [![Java](https://img.shields.io/badge/Java-framework%20puro-1f2937?style=flat-square)](launcher/src/com/josue/atvhome)
-[![APK](https://img.shields.io/badge/APK-45%20KB-1f2937?style=flat-square)](#-el-launcher)
+[![APK](https://img.shields.io/badge/APK-53%20KB-1f2937?style=flat-square)](#-el-launcher)
 [![Estrellas](https://img.shields.io/github/stars/Josuerti/firetv-inicio-atv?style=flat-square&color=34d399)](https://github.com/Josuerti/firetv-inicio-atv/stargazers)
 
 <img src="docs/inicio.png" alt="Pantalla de inicio" width="760">
@@ -56,7 +56,8 @@ adb install -r InicioATV.apk
 adb shell settings put secure enabled_accessibility_services com.josue.atvhome/com.josue.atvhome.HomeService
 adb shell settings put secure accessibility_enabled 1
 adb shell pm grant com.josue.atvhome android.permission.ACCESS_FINE_LOCATION   # opcional: muestra el nombre del Wi-Fi
-adb shell appops set com.josue.atvhome GET_USAGE_STATS allow                    # opcional: fila "Recientes"
+adb shell appops set com.josue.atvhome GET_USAGE_STATS allow                    # opcional: tarjeta "Recientes"
+adb shell pm grant com.josue.atvhome android.permission.WRITE_SECURE_SETTINGS   # opcional: reactiva solo el botón Inicio si Fire OS lo apaga
 ```
 
 <details>
@@ -80,15 +81,15 @@ adb shell appops set com.josue.atvhome GET_USAGE_STATS allow                    
 | Apps de Amazon en segundo plano | Todas activas | **18 desactivadas** |
 | Reconocimiento de lo que ves (ACR) | Activado | Desactivado |
 | Anuncios personalizados y datos de uso | Activados | Desactivados |
-| RAM del launcher | — | ~45 MB, y libera las imágenes cuando abres otra app |
+| RAM del launcher | — | ~60 MB, y libera las imágenes cuando abres otra app |
 
 <table>
 <tr>
-<td width="50%"><img src="docs/inicio.png" alt="Inicio"><br><i>El dock: el nombre de la app con foco brilla en el color de su logo.</i></td>
-<td width="50%"><img src="docs/apps.png" alt="Apps"><br><i>Pulsa ↓ para ver todas las apps. La que tiene el foco crece y muestra su nombre.</i></td>
+<td width="50%"><img src="docs/inicio.png" alt="Inicio"><br><i>Inicio: saludo, apps recientes, clima por horas y dock.</i></td>
+<td width="50%"><img src="docs/apps.png" alt="Apps"><br><i>Pestaña Apps: todas tus apps. La que tiene el foco crece y muestra su nombre.</i></td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/menu.png" alt="Menú"><br><i>Botón Menú ☰: organiza el dock, oculta apps o abre su información.</i></td>
+<td width="50%"><img src="docs/oscuro.png" alt="Tema oscuro"><br><i>Tema oscuro, en Ajustes. El fondo se tiñe del color de la app con foco.</i></td>
 <td width="50%" valign="middle">
 
 **Mando**
@@ -97,7 +98,7 @@ adb shell appops set com.josue.atvhome GET_USAGE_STATS allow                    
 |---|---|
 | OK | Abrir |
 | Menú ☰ / mantener OK | Opciones de la app |
-| ↓ | Ver todas las apps |
+| ↑ hasta arriba | Pestañas Inicio / Apps / Ajustes |
 | Atrás | Volver al dock |
 | Inicio | Siempre aquí |
 
@@ -172,15 +173,17 @@ Todo se hace con `pm disable-user --user 0`: **nada se borra** y se reactiva con
 
 | Función | Detalle |
 |---|---|
-| Reloj | Grande y fino, con saludo ("Buenos días / tardes / noches") y fecha en español |
-| 🌤️ Clima | Temperatura, estado, máxima y mínima de la ciudad de tu zona horaria, con [Open-Meteo](https://open-meteo.com) (sin cuenta ni ubicación). Se actualiza cada 30 minutos |
-| 🕘 Recientes | Las 5 últimas apps que abriste, entre el dock y la cuadrícula. Necesita el permiso de acceso al uso (`appops`) |
-| Botones de cristal | Wi-Fi (con el nombre de la red), *Inicio Amazon* y Ajustes |
-| Dock | Hasta 5 apps. Por defecto: Netflix, Disney+, YouTube, Crunchyroll y Stremio |
+| Pestañas | **Inicio**, **Apps** y **Ajustes** arriba, como en tvOS. Al enfocar una pestaña cambia la página |
+| Saludo y reloj | "Buenos días / tardes / noches", la fecha en español y la hora arriba a la derecha |
+| 🕘 Recientes | Tarjeta con las 3 últimas apps que abriste y hace cuánto ("Hace 5 min"). Necesita el permiso de acceso al uso (`appops`) |
+| 🌤️ Clima | Tarjeta con temperatura, estado, máxima/mínima y las próximas 4 horas de la ciudad de tu zona horaria, con [Open-Meteo](https://open-meteo.com) (sin cuenta ni ubicación). Se actualiza cada 30 minutos |
+| Dock | Hasta 6 apps. Por defecto: Netflix, Disney+, YouTube, Crunchyroll, Stremio y Paramount+ |
+| Apps | Todas tus apps en orden alfabético, en cuadrícula de 6 |
+| Ajustes | Wi-Fi (con el nombre de la red), Ajustes de Fire TV, inicio de Amazon, **tema claro u oscuro** y apps ocultas |
 | Resplandor | Saca el color de cada logo y tiñe el fondo con una transición suave |
-| Cuadrícula | Todas las demás apps en orden alfabético, alineadas con el dock |
 | Limpieza | Oculta las herramientas internas de Fire OS que salen con icono genérico |
-| Ligero | Sin Gradle ni AndroidX: tres clases Java y nada más |
+| Se repara solo | Si Fire OS apaga el servicio del botón Inicio, Inicio ATV lo vuelve a encender al abrirse (con el permiso `WRITE_SECURE_SETTINGS`) |
+| Ligero | Sin Gradle ni AndroidX: cinco clases Java, unos 53 KB |
 
 <details>
 <summary><b>¿Cómo sustituye a la pantalla de Amazon si Fire OS no lo permite?</b></summary>
@@ -237,7 +240,7 @@ powershell -ExecutionPolicy Bypass -File tools\restaurar.ps1 -Todo   # y además
 - 🔌 **`unauthorized` al conectar:** acepta el aviso en la TV. Si no sale, pulsa Inicio para despertarla y vuelve a ejecutar `adb connect`.
 - 🏠 **Vuelve a salir la pantalla de Amazon:** una actualización ha apagado el servicio. Ve a *Ajustes → Accesibilidad → Inicio ATV → Activar*. Fire OS también lo apaga si fuerzas el cierre de Inicio ATV (`am force-stop`): al actualizar, usa solo `adb install -r`.
 - 🌤️ **No sale el clima:** necesita internet. Si no hay red, se reintenta cada minuto.
-- 🕘 **No sale la fila Recientes:** falta el permiso. Ejecuta `adb shell appops set com.josue.atvhome GET_USAGE_STATS allow`.
+- 🕘 **No sale la tarjeta Recientes:** falta el permiso. Ejecuta `adb shell appops set com.josue.atvhome GET_USAGE_STATS allow`.
 - 📶 **El botón dice "Wi-Fi" sin el nombre de la red:** falta el permiso de ubicación. Ejecuta el `pm grant` del inicio rápido.
 - 🖤 **`adb screencap` sale negro:** la TV está en reposo. Ejecuta `adb shell input keyevent KEYCODE_WAKEUP`.
 - 🔁 **Después de actualizar Fire OS vuelve alguna app de Amazon:** vuelve a ejecutar `optimizar.ps1`. Se puede repetir sin problema.
@@ -265,7 +268,7 @@ Técnicamente es una app que se pone encima de la pantalla de Amazon cada vez qu
 
 <details><summary><b>¿Gasta más memoria tener dos launchers?</b></summary>
 
-El de Amazon sigue cargado, como siempre. Inicio ATV usa unos 45 MB y suelta las imágenes cuando abres otra app. A cambio, te ahorras los vídeos y anuncios de la pantalla de Amazon.
+El de Amazon sigue cargado, como siempre. Inicio ATV usa unos 60 MB y suelta las imágenes cuando abres otra app. A cambio, te ahorras los vídeos y anuncios de la pantalla de Amazon.
 </details>
 
 <details><summary><b>¿Y la depuración ADB? ¿Es seguro dejarla activada?</b></summary>
