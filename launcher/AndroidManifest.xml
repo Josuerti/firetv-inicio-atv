@@ -1,16 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.josue.atvhome"
-    android:versionCode="1"
-    android:versionName="1.0">
+    android:versionCode="2"
+    android:versionName="1.1">
 
     <uses-sdk android:minSdkVersion="25" android:targetSdkVersion="30" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Fila "Recientes": se concede desde el PC con appops (ver README) -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Solo para mostrar el nombre de la red Wi-Fi en la pastilla superior -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 

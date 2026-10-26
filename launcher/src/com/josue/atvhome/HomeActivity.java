@@ -74,8 +74,9 @@ public class HomeActivity extends Activity {
 
     private FrameLayout root, header;
     private Scroller scroll;
-    private LinearLayout content, dock, grid;
-    private TextView greeting, clock, date, title, wifiPill, gridTitle, dockHint;
+    private LinearLayout content, dock, grid, recentRow;
+    private TextView greeting, clock, date, weather, title, wifiPill, gridTitle, recentTitle, dockHint;
+    private long weatherAt;
     private GradientDrawable glowBg;
     private int glowColor = 0xFF3A3A3C;
     private ValueAnimator glowAnim;
@@ -83,6 +84,7 @@ public class HomeActivity extends Activity {
     private final List<AppEntry> all = new ArrayList<>();
     private final List<AppEntry> dockApps = new ArrayList<>();
     private final List<AppEntry> gridApps = new ArrayList<>();
+    private final List<String> recentPkgs = new ArrayList<>();
     private String pendingFocusPkg;
     private boolean pendingFocusDock = true;
     private boolean receiversOn;
@@ -125,6 +127,8 @@ public class HomeActivity extends Activity {
         super.onResume();
         updateClock();
         updateWifi();
+        refreshWeather();
+        if (!released && !all.isEmpty()) refreshRecents();
     }
 
     @Override
@@ -144,6 +148,7 @@ public class HomeActivity extends Activity {
             released = true;
             dock.removeAllViews();
             grid.removeAllViews();
+            recentRow.removeAllViews();
             all.clear();
             dockApps.clear();
             gridApps.clear();
@@ -185,6 +190,7 @@ public class HomeActivity extends Activity {
         public void onReceive(Context c, Intent i) {
             updateClock();
             updateWifi();
+            refreshWeather();
         }
     };
 
@@ -230,9 +236,14 @@ public class HomeActivity extends Activity {
         clock.setIncludeFontPadding(false);
         clock.setLetterSpacing(-0.02f);
         date = text(17, 0xFF8E8E93, "sans-serif");
+        weather = text(17, 0xFFB8B8BD, "sans-serif-light");
+        weather.setVisibility(View.GONE);
         clockBox.addView(greeting);
         clockBox.addView(clock);
         clockBox.addView(date);
+        LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(-2, -2);
+        wl.topMargin = px(10);
+        clockBox.addView(weather, wl);
         FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         cl.setMargins(px(56), px(30), 0, 0);
         header.addView(clockBox, cl);
@@ -272,10 +283,20 @@ public class HomeActivity extends Activity {
         dockHint = text(15, 0xFF8E8E93, "sans-serif");
         dockHint.setText("Pulsa el botón Menú del mando sobre una app de abajo para añadirla al dock");
 
+        // Recientes: las últimas apps abiertas (solo aparece si hay permiso de acceso al uso).
+        recentTitle = text(19, 0xFF8E8E93, "sans-serif-medium");
+        recentTitle.setText("Recientes");
+        recentTitle.setVisibility(View.GONE);
+        LinearLayout.LayoutParams rtl = new LinearLayout.LayoutParams(-2, -2);
+        rtl.setMargins(sidePad() + px(10), px(40), 0, px(16));
+        content.addView(recentTitle, rtl);
+        recentRow = gridRow();
+        content.addView(recentRow, recentRow.getLayoutParams());
+
         gridTitle = text(19, 0xFF8E8E93, "sans-serif-medium");
         gridTitle.setText("Apps");
         LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(-2, -2);
-        gl.setMargins(sidePad() + px(10), px(40), 0, px(16));
+        gl.setMargins(sidePad() + px(10), px(26), 0, px(16));
         content.addView(gridTitle, gl);
 
         grid = new LinearLayout(this);
@@ -290,12 +311,71 @@ public class HomeActivity extends Activity {
     private void reload() {
         io.execute(() -> {
             final List<AppEntry> list = AppEntry.query(this);
+            final List<String> rec = Recents.query(this);
             ui.post(() -> {
                 all.clear();
                 all.addAll(list);
+                recentPkgs.clear();
+                recentPkgs.addAll(rec);
                 rebuild();
             });
         });
+    }
+
+    /** Al volver de una app solo cambia la fila de recientes: no hace falta recargar todo. */
+    private void refreshRecents() {
+        io.execute(() -> {
+            final List<String> rec = Recents.query(this);
+            ui.post(() -> {
+                if (rec.equals(recentPkgs)) return;
+                recentPkgs.clear();
+                recentPkgs.addAll(rec);
+                buildRecents();
+            });
+        });
+    }
+
+    private void buildRecents() {
+        recentRow.removeAllViews();
+        Set<String> hidden = hidden();
+        for (String p : recentPkgs) {
+            AppEntry a = findApp(p);
+            if (a == null || hidden.contains(p)) continue;
+            recentRow.addView(makeTile(a, false));
+            if (recentRow.getChildCount() == COLS) break;
+        }
+        int vis = recentRow.getChildCount() == 0 ? View.GONE : View.VISIBLE;
+        recentRow.setVisibility(vis);
+        recentTitle.setVisibility(vis);
+    }
+
+    private void refreshWeather() {
+        long now = System.currentTimeMillis();
+        if (now - weatherAt < 30 * 60 * 1000L) return;
+        weatherAt = now;
+        io.execute(() -> {
+            try {
+                final Weather w = Weather.fetch();
+                ui.post(() -> {
+                    weather.setText(w.line());
+                    weather.setVisibility(View.VISIBLE);
+                });
+            } catch (Exception e) {
+                weatherAt = 0; // sin red: se reintenta en el siguiente minuto
+            }
+        });
+    }
+
+    private LinearLayout gridRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setClipChildren(false);
+        row.setClipToPadding(false);
+        row.setPadding(sidePad(), 0, 0, 0);
+        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, -2);
+        rl.bottomMargin = px(14);
+        row.setLayoutParams(rl);
+        return row;
     }
 
     private void rebuild() {
@@ -322,18 +402,14 @@ public class HomeActivity extends Activity {
         for (AppEntry a : dockApps) dock.addView(makeTile(a, true));
         if (dockApps.isEmpty()) dock.addView(dockHint);
 
+        buildRecents();
+
         grid.removeAllViews();
         LinearLayout row = null;
         for (int i = 0; i < gridApps.size(); i++) {
             if (i % COLS == 0) {
-                row = new LinearLayout(this);
-                row.setOrientation(LinearLayout.HORIZONTAL);
-                row.setClipChildren(false);
-                row.setClipToPadding(false);
-                row.setPadding(sidePad(), 0, 0, 0);
-                LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-1, -2);
-                rl.bottomMargin = px(14);
-                grid.addView(row, rl);
+                row = gridRow();
+                grid.addView(row);
             }
             row.addView(makeTile(gridApps.get(i), false));
         }
@@ -447,7 +523,7 @@ public class HomeActivity extends Activity {
         } else {
             title.animate().alpha(0f).setDuration(150).start();
             View row = (View) card.getParent().getParent();
-            int rowBottom = grid.getTop() + row.getBottom();
+            int rowBottom = row.getBottom() + (row.getParent() == grid ? grid.getTop() : 0);
             int minY = dock.getTop() - px(26);
             scroll.smoothScrollTo(0, Math.max(minY, rowBottom + px(56) - scroll.getHeight()));
         }

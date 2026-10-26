@@ -56,6 +56,7 @@ adb install -r InicioATV.apk
 adb shell settings put secure enabled_accessibility_services com.josue.atvhome/com.josue.atvhome.HomeService
 adb shell settings put secure accessibility_enabled 1
 adb shell pm grant com.josue.atvhome android.permission.ACCESS_FINE_LOCATION   # opcional: muestra el nombre del Wi-Fi
+adb shell appops set com.josue.atvhome GET_USAGE_STATS allow                    # opcional: fila "Recientes"
 ```
 
 <details>
@@ -172,6 +173,8 @@ Todo se hace con `pm disable-user --user 0`: **nada se borra** y se reactiva con
 | Función | Detalle |
 |---|---|
 | Reloj | Grande y fino, con saludo ("Buenos días / tardes / noches") y fecha en español |
+| 🌤️ Clima | Temperatura, estado, máxima y mínima de la ciudad de tu zona horaria, con [Open-Meteo](https://open-meteo.com) (sin cuenta ni ubicación). Se actualiza cada 30 minutos |
+| 🕘 Recientes | Las 5 últimas apps que abriste, entre el dock y la cuadrícula. Necesita el permiso de acceso al uso (`appops`) |
 | Botones de cristal | Wi-Fi (con el nombre de la red), *Inicio Amazon* y Ajustes |
 | Dock | Hasta 5 apps. Por defecto: Netflix, Disney+, YouTube, Crunchyroll y Stremio |
 | Resplandor | Saca el color de cada logo y tiñe el fondo con una transición suave |
@@ -232,7 +235,9 @@ powershell -ExecutionPolicy Bypass -File tools\restaurar.ps1 -Todo   # y además
 ## 🛠️ Solución de problemas
 
 - 🔌 **`unauthorized` al conectar:** acepta el aviso en la TV. Si no sale, pulsa Inicio para despertarla y vuelve a ejecutar `adb connect`.
-- 🏠 **Vuelve a salir la pantalla de Amazon:** una actualización ha apagado el servicio. Ve a *Ajustes → Accesibilidad → Inicio ATV → Activar*.
+- 🏠 **Vuelve a salir la pantalla de Amazon:** una actualización ha apagado el servicio. Ve a *Ajustes → Accesibilidad → Inicio ATV → Activar*. Fire OS también lo apaga si fuerzas el cierre de Inicio ATV (`am force-stop`): al actualizar, usa solo `adb install -r`.
+- 🌤️ **No sale el clima:** necesita internet. Si no hay red, se reintenta cada minuto.
+- 🕘 **No sale la fila Recientes:** falta el permiso. Ejecuta `adb shell appops set com.josue.atvhome GET_USAGE_STATS allow`.
 - 📶 **El botón dice "Wi-Fi" sin el nombre de la red:** falta el permiso de ubicación. Ejecuta el `pm grant` del inicio rápido.
 - 🖤 **`adb screencap` sale negro:** la TV está en reposo. Ejecuta `adb shell input keyevent KEYCODE_WAKEUP`.
 - 🔁 **Después de actualizar Fire OS vuelve alguna app de Amazon:** vuelve a ejecutar `optimizar.ps1`. Se puede repetir sin problema.
@@ -268,6 +273,16 @@ El de Amazon sigue cargado, como siempre. Inicio ATV usa unos 45 MB y suelta las
 No. Mientras está activada, cualquiera en tu red puede intentar conectarse (aunque tendrías que aceptarlo en la TV). **Desactívala al terminar.**
 </details>
 
+<details><summary><b>¿Por qué no hay "Seguir viendo" como en Apple TV?</b></summary>
+
+Lo probamos. La lista del sistema (`content://android.media.tv/watch_next_program`) existe en Fire OS 8, pero **está vacía**: Netflix, Disney+, YouTube y las demás apps de Fire TV no publican ahí lo que estás viendo. La fila **Recientes** es lo más parecido que se puede hacer.
+</details>
+
+<details><summary><b>¿El clima es de mi ciudad?</b></summary>
+
+Usa la ciudad principal de tu zona horaria (`America/Guayaquil` → Guayaquil, `America/Bogota` → Bogotá, etc.). Para otra ciudad, edita `cityFor` en `Weather.java`.
+</details>
+
 <details><summary><b>¿Puedo cambiar las apps del dock?</b></summary>
 
 Sí. Pulsa Menú ☰ sobre cualquier app: *Añadir al dock*, *Quitar del dock*, *Mover a la izquierda / derecha*.
@@ -278,6 +293,7 @@ Sí. Pulsa Menú ☰ sobre cualquier app: *Añadir al dock*, *Quitar del dock*, 
 ## 🙏 Créditos
 
 - Inspirado en [CleanYourTV](https://github.com/Gathin23/cleanyourtv) de Gathin23, que limpia Android TV y Google TV. Este proyecto lleva la idea a Fire TV, donde aquel no funciona.
+- Las ideas del clima con Open-Meteo y de la fila de apps recientes vienen de [Luma TV](https://github.com/0xProbabillity/luma-tv) de 0xProbabillity (MIT).
 - Hecho con [Claude Code](https://claude.com/claude-code).
 
 ## ⚖️ Aviso legal
