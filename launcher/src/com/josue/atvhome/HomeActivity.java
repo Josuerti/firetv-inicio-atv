@@ -70,6 +70,7 @@ public class HomeActivity extends Activity {
     static final Locale ES = new Locale("es", "ES");
     static final int PAGE_HOME = 0, PAGE_APPS = 1, PAGE_SETTINGS = 2;
     static final int KIND_DOCK = 0, KIND_RECENT = 1, KIND_GRID = 2;
+    static final int TAB_H = 34, TAB_INSET = 4;
 
     /** Colores de cada tema. */
     private static final class Palette {
@@ -84,7 +85,7 @@ public class HomeActivity extends Activity {
             text = light ? 0xFF1C1C1E : 0xFFFFFFFF;
             sub = light ? 0xFF6E6E73 : 0xFF98989D;
             tabBar = light ? 0x8CFFFFFF : 0x1FFFFFFF;
-            tabSel = light ? 0xFFFFFFFF : 0x40FFFFFF;
+            tabSel = light ? 0xBFFFFFFF : 0x40FFFFFF;
             tabText = light ? 0xFF3A3A3C : 0xFFEBEBF0;
             glowAlpha = light ? 0x38 : 0x5C;
         }
@@ -241,18 +242,20 @@ public class HomeActivity extends Activity {
 
         // Barra superior: pestañas centradas y reloj a la derecha.
         LinearLayout tabBar = new LinearLayout(this);
-        tabBar.setPadding(px(5), px(5), px(5), px(5));
-        tabBar.setBackground(round(pal.tabBar, px(24)));
-        tabBar.setClipChildren(false);
+        // Barra y pestañas con esquinas concéntricas: radio de la barra = radio de la pestaña + margen.
+        tabBar.setPadding(px(TAB_INSET), px(TAB_INSET), px(TAB_INSET), px(TAB_INSET));
+        tabBar.setBackground(round(pal.tabBar, px(TAB_H / 2f + TAB_INSET)));
         String[] names = {"Inicio", "Apps", "Ajustes"};
         for (int i = 0; i < 3; i++) {
             final int p = i;
             TextView t = text(15, pal.tabText, "sans-serif-medium");
             t.setText(names[i]);
-            t.setPadding(px(20), px(7), px(20), px(7));
+            t.setGravity(Gravity.CENTER);
+            t.setIncludeFontPadding(false);
+            t.setPadding(px(20), 0, px(20), 0);
+            t.setLayoutParams(new LinearLayout.LayoutParams(-2, px(TAB_H)));
             t.setFocusable(true);
             t.setOnFocusChangeListener((v, has) -> {
-                v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).setDuration(150).start();
                 if (has) showPage(p);
                 styleTabs();
             });
@@ -479,12 +482,13 @@ public class HomeActivity extends Activity {
         styleTabs();
     }
 
+    /** Con foco: pastilla sólida. Seleccionada sin foco: pastilla suave. Resto: sin fondo. */
     private void styleTabs() {
         for (int i = 0; i < 3; i++) {
-            boolean sel = i == page;
-            tabs[i].setBackground(sel ? round(pal.tabSel, px(20)) : null);
-            tabs[i].setTextColor(sel ? pal.text : pal.tabText);
-            tabs[i].setTranslationZ(sel && pal.light ? px(3) : 0);
+            boolean sel = i == page, focus = tabs[i].isFocused();
+            int bg = focus ? (pal.light ? 0xFFFFFFFF : 0xF2FFFFFF) : sel ? pal.tabSel : 0;
+            tabs[i].setBackground(bg == 0 ? null : round(bg, px(TAB_H / 2f)));
+            tabs[i].setTextColor(focus && !pal.light ? 0xFF1C1C1E : sel || focus ? pal.text : pal.tabText);
         }
     }
 
