@@ -29,9 +29,11 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -54,12 +56,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Pantalla de inicio estilo tvOS: pestañas Inicio / Apps / Ajustes, saludo, tarjetas de
- * Recientes y Clima, y dock. Tema claro u oscuro.
+ * Pantalla de inicio estilo tvOS: pestañas Inicio / Ajustes, saludo, tarjeta de partidos
+ * (Emelec, Real Madrid y Champions), clima por horas, dock y, bajando, todas las apps.
+ * Tema claro u oscuro. Los datos solo se actualizan mientras la pantalla está a la vista.
  */
 public class HomeActivity extends Activity {
     static final String EXTRA_FROM_HOME_KEY = "from_home_key";
-    static final int DOCK_MAX = 6, GRID_COLS = 6, RECENT_MAX = 3;
+    static final int DOCK_MAX = 6, GRID_COLS = 6, MATCH_MAX = 8;
     static final String[] DEFAULT_DOCK = {
             "com.netflix.ninja",
             "com.disney.disneyplus",
@@ -68,9 +71,10 @@ public class HomeActivity extends Activity {
             "com.stremio.one",
             "com.cbs.ca"};
     static final Locale ES = new Locale("es", "ES");
-    static final int PAGE_HOME = 0, PAGE_APPS = 1, PAGE_SETTINGS = 2;
-    static final int KIND_DOCK = 0, KIND_RECENT = 1, KIND_GRID = 2;
+    static final int PAGE_HOME = 0, PAGE_SETTINGS = 1;
+    static final int KIND_DOCK = 0, KIND_GRID = 1;
     static final int TAB_H = 34, TAB_INSET = 4;
+    static final long WEATHER_EVERY = 30 * 60 * 1000L, MATCHES_EVERY = 10 * 60 * 1000L, LIVE_EVERY = 60 * 1000L;
 
     /** Colores de cada tema. */
     private static final class Palette {
@@ -96,34 +100,28 @@ public class HomeActivity extends Activity {
     private SharedPreferences prefs;
     private Palette pal;
     private float dp;
-    private int screenW;
+    private int screenW, screenH;
 
-    private GradientDrawable glowBg;
+    private GradientDrawable rootBg, glowBg;
     private int glowColor = 0xFF8E8E93;
     private ValueAnimator glowAnim;
 
-    private final TextView[] tabs = new TextView[3];
-    private final View[] pages = new View[3];
+    private LinearLayout tabBar;
+    private final TextView[] tabs = new TextView[2];
+    private final View[] pages = new View[2];
     private int page = PAGE_HOME;
 
-    private TextView clock, greeting, date, wifiRow, themeRow, hiddenRow, teamsRow, recentEmpty, cardTitle;
-    private LinearLayout dock, recentRow, newsList, appsGrid, settingsList;
-    /** La tarjeta grande muestra noticias (por defecto) o apps recientes. */
-    private boolean newsMode;
-    /** "matches" (próximos partidos, por defecto), "news" o "recents". */
-    private String cardMode;
-    private long newsAt;
-    private GradientDrawable rootBg;
-    private boolean liveShown;
-    private ScrollView appsScroll;
-    // Tarjeta de clima
+    private ScrollView homeScroll;
+    private TextView clock, greeting, date, wifiRow, hiddenRow, matchEmpty;
+    private LinearLayout dock, matchRow, appsGrid, settingsList;
     private TextView wCity, wIcon, wTemp, wDesc;
     private final TextView[][] wHours = new TextView[Weather.HOURS][3];
-    private long weatherAt;
+
+    private boolean visible, liveShown;
+    private long weatherAt, matchesAt;
 
     private final List<AppEntry> all = new ArrayList<>();
     private final List<AppEntry> dockApps = new ArrayList<>();
-    private final List<Recents.Item> recents = new ArrayList<>();
     private String pendingFocusPkg;
     private boolean pendingFocusDock = true;
     private boolean released;
@@ -135,10 +133,9 @@ public class HomeActivity extends Activity {
         super.onCreate(b);
         dp = getResources().getDisplayMetrics().density;
         screenW = getResources().getDisplayMetrics().widthPixels;
+        screenH = getResources().getDisplayMetrics().heightPixels;
         prefs = getSharedPreferences("atv", MODE_PRIVATE);
         pal = new Palette(!"dark".equals(prefs.getString("theme", "light")));
-        cardMode = prefs.getString("card", "matches");
-        newsMode = !"recents".equals(cardMode); // noticias y partidos usan la misma fila de recuadros
         setContentView(buildChrome());
 
         IntentFilter pf = new IntentFilter();
@@ -171,12 +168,17 @@ public class HomeActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        visible = true;
         updateClock();
         updateWifi();
-        refreshWeather();
-        if (newsMode) refreshNews();
-        else if (!all.isEmpty()) refreshRecents();
+        refreshData();
         ensureHomeService();
+    }
+
+    @Override
+    protected void onPause() {
+        visible = false; // mientras ves otra app no se descarga nada
+        super.onPause();
     }
 
     /** Al irnos a segundo plano soltamos banners e iconos: la RAM es para la app que estás viendo. */
@@ -186,7 +188,6 @@ public class HomeActivity extends Activity {
         if (level >= TRIM_MEMORY_UI_HIDDEN && !released) {
             released = true;
             dock.removeAllViews();
-            recentRow.removeAllViews();
             appsGrid.removeAllViews();
             all.clear();
             dockApps.clear();
@@ -224,8 +225,7 @@ public class HomeActivity extends Activity {
         public void onReceive(Context c, Intent i) {
             updateClock();
             updateWifi();
-            refreshWeather();
-            if (newsMode) refreshNews();
+            refreshData(); // cada minuto: comprueba si toca actualizar clima o partidos
         }
     };
 
@@ -235,33 +235,38 @@ public class HomeActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         rootBg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{pal.bgTop, pal.bgBottom});
         root.setBackground(rootBg);
-
         glowBg = new GradientDrawable();
         glowBg.setGradientType(GradientDrawable.RADIAL_GRADIENT);
         glowBg.setGradientRadius(px(620));
         glowBg.setGradientCenter(0.5f, 1.05f);
-        applyGlow(glowColor);
         View glow = new View(this);
         glow.setBackground(glowBg);
         root.addView(glow, new FrameLayout.LayoutParams(-1, -1));
+        applyGlow(glowColor);
 
-        // Barra superior: pestañas centradas y reloj a la derecha.
-        LinearLayout tabBar = new LinearLayout(this);
-        // Barra y pestañas con esquinas concéntricas: radio de la barra = radio de la pestaña + margen.
+        pages[PAGE_HOME] = buildHomePage();
+        pages[PAGE_SETTINGS] = buildSettingsPage();
+        for (View p : pages) root.addView(p, new FrameLayout.LayoutParams(-1, -1));
+
+        // Barra superior fija: pestañas centradas (esquinas concéntricas) y reloj a la derecha.
+        tabBar = new LinearLayout(this);
         tabBar.setPadding(px(TAB_INSET), px(TAB_INSET), px(TAB_INSET), px(TAB_INSET));
         tabBar.setBackground(round(pal.tabBar, px(TAB_H / 2f + TAB_INSET)));
-        String[] names = {"Inicio", "Apps", "Ajustes"};
-        for (int i = 0; i < 3; i++) {
+        String[] names = {"Inicio", "Ajustes"};
+        for (int i = 0; i < 2; i++) {
             final int p = i;
             TextView t = text(15, pal.tabText, "sans-serif-medium");
             t.setText(names[i]);
             t.setGravity(Gravity.CENTER);
             t.setIncludeFontPadding(false);
-            t.setPadding(px(20), 0, px(20), 0);
+            t.setPadding(px(22), 0, px(22), 0);
             t.setLayoutParams(new LinearLayout.LayoutParams(-2, px(TAB_H)));
             t.setFocusable(true);
             t.setOnFocusChangeListener((v, has) -> {
-                if (has) showPage(p);
+                if (has) {
+                    showPage(p);
+                    homeScroll.smoothScrollTo(0, 0);
+                }
                 styleTabs();
             });
             t.setOnKeyListener((v, code, ev) -> {
@@ -287,17 +292,33 @@ public class HomeActivity extends Activity {
         FrameLayout.LayoutParams ckl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.END);
         ckl.setMargins(0, px(26), px(52), 0);
         root.addView(clock, ckl);
-
-        pages[PAGE_HOME] = buildHomePage();
-        pages[PAGE_APPS] = buildAppsPage();
-        pages[PAGE_SETTINGS] = buildSettingsPage();
-        for (View p : pages) root.addView(p, new FrameLayout.LayoutParams(-1, -1));
         return root;
     }
 
     private View buildHomePage() {
-        FrameLayout home = new FrameLayout(this);
-        home.setClipChildren(false);
+        homeScroll = new ScrollView(this) {
+            @Override
+            protected void onScrollChanged(int l, int t, int ol, int ot) {
+                super.onScrollChanged(l, t, ol, ot);
+                // Al bajar a las apps, la barra superior se desvanece.
+                float a = 1f - Math.min(1f, t / (float) px(120));
+                tabBar.setAlpha(a);
+                clock.setAlpha(a);
+            }
+        };
+        homeScroll.setVerticalScrollBarEnabled(false);
+        homeScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        homeScroll.setClipChildren(false);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setClipChildren(false);
+        content.setClipToPadding(false);
+        content.setPadding(0, 0, 0, px(60));
+        homeScroll.addView(content, new FrameLayout.LayoutParams(-1, -2));
+
+        FrameLayout top = new FrameLayout(this);
+        top.setClipChildren(false);
+        content.addView(top, new LinearLayout.LayoutParams(-1, screenH));
 
         LinearLayout hello = new LinearLayout(this);
         hello.setOrientation(LinearLayout.VERTICAL);
@@ -307,41 +328,36 @@ public class HomeActivity extends Activity {
         hello.addView(date);
         FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         hl.setMargins(px(56), px(72), 0, 0);
-        home.addView(hello, hl);
+        top.addView(hello, hl);
 
-        // Tarjetas: Recientes (izquierda) y Clima (derecha).
         LinearLayout cards = new LinearLayout(this);
         cards.setClipChildren(false);
         FrameLayout.LayoutParams cdl = new FrameLayout.LayoutParams(-1, px(206), Gravity.TOP);
         cdl.setMargins(px(48), px(148), px(48), 0);
-        home.addView(cards, cdl);
+        top.addView(cards, cdl);
 
-        LinearLayout recentCard = card();
-        recentCard.setOrientation(LinearLayout.VERTICAL);
-        recentCard.setClipChildren(false);
-        cardTitle = text(13, pal.sub, "sans-serif-medium");
-        cardTitle.setText("matches".equals(cardMode) ? "Próximos partidos"
-                : newsMode ? "Noticias · " + News.SOURCE : "Recientes");
-        recentCard.addView(cardTitle);
-        recentRow = new LinearLayout(this);
-        recentRow.setClipChildren(false);
-        recentRow.setClipToPadding(false);
-        LinearLayout.LayoutParams rrl = new LinearLayout.LayoutParams(-1, -2);
-        rrl.topMargin = px(10);
-        recentCard.addView(recentRow, rrl);
-        newsList = new LinearLayout(this);
-        newsList.setClipChildren(false);
-        newsList.setClipToPadding(false);
-        LinearLayout.LayoutParams nll = new LinearLayout.LayoutParams(-1, -2);
-        nll.topMargin = px(10);
-        recentCard.addView(newsList, nll);
-        recentEmpty = text(14, pal.sub, "sans-serif");
-        recentEmpty.setText("matches".equals(cardMode) ? "Buscando los partidos de tus equipos…"
-                : newsMode ? "Cargando titulares…" : "Las apps que abras aparecerán aquí.");
-        recentCard.addView(recentEmpty);
-        recentRow.setVisibility(newsMode ? View.GONE : View.VISIBLE);
-        newsList.setVisibility(newsMode ? View.VISIBLE : View.GONE);
-        cards.addView(recentCard, new LinearLayout.LayoutParams(0, -1, 1f));
+        // Tarjeta de partidos: fila que se desplaza a los lados.
+        LinearLayout matchCard = card();
+        matchCard.setOrientation(LinearLayout.VERTICAL);
+        matchCard.setClipChildren(false);
+        TextView mt = text(13, pal.sub, "sans-serif-medium");
+        mt.setText("Partidos · Emelec, Real Madrid y Champions");
+        matchCard.addView(mt);
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        hs.setClipChildren(false);
+        hs.setClipToPadding(false);
+        hs.setPadding(0, px(8), 0, 0);
+        matchRow = new LinearLayout(this);
+        matchRow.setClipChildren(false);
+        matchRow.setClipToPadding(false);
+        matchRow.setPadding(px(4), px(4), px(4), 0);
+        hs.addView(matchRow);
+        matchCard.addView(hs, new LinearLayout.LayoutParams(-1, -2));
+        matchEmpty = text(14, pal.sub, "sans-serif");
+        matchEmpty.setText("Buscando partidos…");
+        matchCard.addView(matchEmpty);
+        cards.addView(matchCard, new LinearLayout.LayoutParams(0, -1, 1f));
 
         LinearLayout weatherCard = card();
         weatherCard.setOrientation(LinearLayout.VERTICAL);
@@ -387,7 +403,6 @@ public class HomeActivity extends Activity {
         wcl.leftMargin = px(16);
         cards.addView(weatherCard, wcl);
 
-        // Dock.
         dock = new LinearLayout(this);
         dock.setGravity(Gravity.CENTER);
         dock.setClipChildren(false);
@@ -396,23 +411,20 @@ public class HomeActivity extends Activity {
         dock.setBackground(round(pal.card, px(28)));
         FrameLayout.LayoutParams dl = new FrameLayout.LayoutParams(-1, px(118), Gravity.BOTTOM);
         dl.setMargins(px(48), 0, px(48), px(26));
-        home.addView(dock, dl);
-        return home;
-    }
+        top.addView(dock, dl);
 
-    private View buildAppsPage() {
-        appsScroll = new ScrollView(this);
-        appsScroll.setVerticalScrollBarEnabled(false);
-        appsScroll.setClipChildren(false);
-        appsScroll.setClipToPadding(false);
-        appsScroll.setPadding(0, px(84), 0, 0);
+        // Debajo del dock, todas las apps (se llega bajando).
+        TextView appsTitle = text(19, pal.sub, "sans-serif-medium");
+        appsTitle.setText("Apps");
+        LinearLayout.LayoutParams atl = new LinearLayout.LayoutParams(-2, -2);
+        atl.setMargins(px(66), px(8), 0, px(14));
+        content.addView(appsTitle, atl);
         appsGrid = new LinearLayout(this);
         appsGrid.setOrientation(LinearLayout.VERTICAL);
         appsGrid.setClipChildren(false);
         appsGrid.setClipToPadding(false);
-        appsGrid.setPadding(0, px(16), 0, px(40));
-        appsScroll.addView(appsGrid, new FrameLayout.LayoutParams(-1, -2));
-        return appsScroll;
+        content.addView(appsGrid, new LinearLayout.LayoutParams(-1, -2));
+        return homeScroll;
     }
 
     private View buildSettingsPage() {
@@ -433,24 +445,17 @@ public class HomeActivity extends Activity {
         });
         settingRow("Ajustes de Fire TV", v -> startSafe(new Intent(Settings.ACTION_SETTINGS)));
         settingRow("Abrir el inicio de Amazon", v -> openAmazonHome());
-        themeRow = settingRow(pal.light ? "Tema: claro" : "Tema: oscuro", v -> {
+        settingRow(pal.light ? "Tema: claro" : "Tema: oscuro", v -> {
             prefs.edit().putString("theme", pal.light ? "dark" : "light").apply();
             recreate();
         });
-        String cardLabel = "matches".equals(cardMode) ? "próximos partidos" : newsMode ? "noticias" : "apps recientes";
-        settingRow("Tarjeta de inicio: " + cardLabel, v -> {
-            String next = "matches".equals(cardMode) ? "news" : newsMode ? "recents" : "matches";
-            prefs.edit().putString("card", next).apply();
-            recreate();
-        });
-        teamsRow = settingRow("Equipos favoritos (" + Matches.favs(favCsv()).size() + ")", v -> chooseTeams());
         hiddenRow = settingRow("Mostrar apps ocultas", v -> {
             prefs.edit().remove("hidden").apply();
             toast("Apps ocultas visibles otra vez");
             rebuild();
         });
         TextView about = text(13, pal.sub, "sans-serif");
-        about.setText("Inicio ATV 2.3 · github.com/Josuerti/firetv-inicio-atv");
+        about.setText("Inicio ATV 2.4 · github.com/Josuerti/firetv-inicio-atv");
         LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-2, -2);
         al.topMargin = px(18);
         settingsList.addView(about, al);
@@ -488,13 +493,15 @@ public class HomeActivity extends Activity {
 
     private void showPage(int p) {
         page = p;
-        for (int i = 0; i < 3; i++) pages[i].setVisibility(i == p ? View.VISIBLE : View.GONE);
+        for (int i = 0; i < 2; i++) pages[i].setVisibility(i == p ? View.VISIBLE : View.GONE);
+        tabBar.setAlpha(1f);
+        clock.setAlpha(1f);
         styleTabs();
     }
 
     /** Con foco: pastilla sólida. Seleccionada sin foco: pastilla suave. Resto: sin fondo. */
     private void styleTabs() {
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 2; i++) {
             boolean sel = i == page, focus = tabs[i].isFocused();
             int bg = focus ? (pal.light ? 0xFFFFFFFF : 0xF2FFFFFF) : sel ? pal.tabSel : 0;
             tabs[i].setBackground(bg == 0 ? null : round(bg, px(TAB_H / 2f)));
@@ -504,26 +511,23 @@ public class HomeActivity extends Activity {
 
     private View pageFirst(int p) {
         if (p == PAGE_HOME) {
-            if (newsMode && newsList.getChildCount() > 0) return newsList.getChildAt(0).findViewWithTag(TAG_CARD);
-            if (!newsMode && recentRow.getChildCount() > 0) return recentRow.getChildAt(0).findViewWithTag(TAG_CARD);
-            return dock.getChildCount() > 0 ? dock.getChildAt(0).findViewWithTag(TAG_CARD) : null;
-        }
-        if (p == PAGE_APPS) {
-            if (appsGrid.getChildCount() == 0) return null;
-            View row = appsGrid.getChildAt(0);
-            return ((LinearLayout) row).getChildCount() > 0 ? ((LinearLayout) row).getChildAt(0).findViewWithTag(TAG_CARD) : null;
+            if (matchRow.getChildCount() > 0) return matchRow.getChildAt(0).findViewWithTag(TAG_CARD);
+            return firstDock();
         }
         return settingsList.getChildAt(0);
     }
 
+    private View firstDock() {
+        return dock.getChildCount() > 0 ? dock.getChildAt(0).findViewWithTag(TAG_CARD) : null;
+    }
+
     private void goHome() {
         showPage(PAGE_HOME);
+        homeScroll.smoothScrollTo(0, 0);
         View f = getCurrentFocus();
-        if (f == null || !(f.getTag(R_KIND) instanceof Integer) || (Integer) f.getTag(R_KIND) != KIND_DOCK) {
-            if (dock.getChildCount() > 0) {
-                View c = dock.getChildAt(0).findViewWithTag(TAG_CARD);
-                if (c != null) c.requestFocus();
-            }
+        if (f == null || !Integer.valueOf(KIND_DOCK).equals(f.getTag(R_KIND))) {
+            View c = firstDock();
+            if (c != null) c.requestFocus();
         }
     }
 
@@ -536,25 +540,10 @@ public class HomeActivity extends Activity {
     private void reload() {
         io.execute(() -> {
             final List<AppEntry> list = AppEntry.query(this);
-            final List<Recents.Item> rec = Recents.query(this);
             ui.post(() -> {
                 all.clear();
                 all.addAll(list);
-                recents.clear();
-                recents.addAll(rec);
                 rebuild();
-            });
-        });
-    }
-
-    private void refreshRecents() {
-        io.execute(() -> {
-            final List<Recents.Item> rec = Recents.query(this);
-            ui.post(() -> {
-                if (rec.equals(recents)) return;
-                recents.clear();
-                recents.addAll(rec);
-                buildRecents();
             });
         });
     }
@@ -577,21 +566,19 @@ public class HomeActivity extends Activity {
             if (a != null && !dockApps.contains(a) && dockApps.size() < DOCK_MAX) dockApps.add(a);
         }
         dock.removeAllViews();
-        for (AppEntry a : dockApps) dock.addView(makeTile(a, KIND_DOCK, px(124), px(70), null));
+        for (AppEntry a : dockApps) dock.addView(makeTile(a, KIND_DOCK, px(124), px(70)));
         if (dockApps.isEmpty()) {
             TextView hint = text(15, pal.sub, "sans-serif");
-            hint.setText("Ve a Apps y pulsa Menú ☰ sobre una app para añadirla aquí");
+            hint.setText("Baja a Apps y pulsa Menú ☰ sobre una app para añadirla aquí");
             dock.addView(hint);
         }
-
-        buildRecents();
 
         appsGrid.removeAllViews();
         int side = Math.max(0, (screenW - GRID_COLS * (px(128) + px(20))) / 2);
         LinearLayout row = null;
         int n = 0;
         for (AppEntry a : all) {
-            if (hidden.contains(a.pkg)) continue;
+            if (hidden.contains(a.pkg) || dockApps.contains(a)) continue;
             if (n % GRID_COLS == 0) {
                 row = new LinearLayout(this);
                 row.setClipChildren(false);
@@ -601,338 +588,24 @@ public class HomeActivity extends Activity {
                 rl.bottomMargin = px(10);
                 appsGrid.addView(row, rl);
             }
-            row.addView(makeTile(a, KIND_GRID, px(128), px(72), null));
+            row.addView(makeTile(a, KIND_GRID, px(128), px(72)));
             n++;
         }
         hiddenRow.setText(hidden.isEmpty() ? "No hay apps ocultas" : "Mostrar apps ocultas (" + hidden.size() + ")");
-        hiddenRow.setEnabled(!hidden.isEmpty());
 
         View target = findTile(pendingFocusPkg, pendingFocusDock);
         pendingFocusPkg = null;
-        if (target == null && page == PAGE_HOME && dock.getChildCount() > 0) target = dock.getChildAt(0).findViewWithTag(TAG_CARD);
+        if (target == null && page == PAGE_HOME) target = firstDock();
         if (target != null) target.requestFocus();
     }
 
-    private void refreshNews() {
-        long now = System.currentTimeMillis();
-        if ("matches".equals(cardMode)) {
-            // Partidos: cada 15 min, o cada 2 min mientras alguno está en vivo.
-            if (now - newsAt < (liveShown ? 2 : 15) * 60 * 1000L) return;
-            newsAt = now;
-            final List<String> favs = Matches.favs(favCsv());
-            io.execute(() -> {
-                final List<Matches.Match> ms = Matches.fetch(favs, 3);
-                ui.post(() -> {
-                    if (ms.isEmpty()) {
-                        newsAt = 0;
-                        if (newsList.getChildCount() == 0) recentEmpty.setText("Sin partidos próximos o sin conexión.");
-                        return;
-                    }
-                    showMatches(ms);
-                });
-            });
-            return;
-        }
-        if (now - newsAt < 30 * 60 * 1000L) return;
-        newsAt = now;
-        io.execute(() -> {
-            try {
-                final List<News.Item> items = News.fetch(3, px(150));
-                ui.post(() -> showNews(items));
-            } catch (Exception e) {
-                newsAt = 0; // sin red: se reintenta en el siguiente minuto
-                ui.post(() -> {
-                    if (newsList.getChildCount() == 0) recentEmpty.setText("Sin conexión: los titulares volverán solos.");
-                });
-            }
-        });
-    }
-
-    private void showNews(List<News.Item> items) {
-        boolean hadFocus = newsList.findFocus() != null;
-        newsList.removeAllViews();
-        for (final News.Item it : items) {
-            final FrameLayout card = new FrameLayout(this);
-            card.setTag(TAG_CARD);
-            card.setFocusable(true);
-            card.setClipToOutline(true);
-            final int radius = px(12);
-            card.setOutlineProvider(new ViewOutlineProvider() {
-                @Override
-                public void getOutline(View v, Outline o) {
-                    o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
-                }
-            });
-            final int tint;
-            if (it.photo != null) {
-                ImageView img = new ImageView(this);
-                img.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                img.setImageBitmap(it.photo);
-                card.addView(img, new FrameLayout.LayoutParams(-1, -1));
-                Bitmap one = Bitmap.createScaledBitmap(it.photo, 1, 1, true);
-                tint = one.getPixel(0, 0);
-                one.recycle();
-            } else {
-                tint = 0xFF5A5A60;
-                card.setBackgroundColor(pal.light ? 0xFFE5E5EA : 0xFF2C2C2E);
-                TextView src = text(13, pal.sub, "sans-serif-medium");
-                src.setText(News.SOURCE);
-                card.addView(src, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
-            }
-            View sheen = new View(this);
-            GradientDrawable sh = new GradientDrawable();
-            sh.setCornerRadius(radius);
-            sh.setStroke(Math.max(1, px(1)), 0x80FFFFFF);
-            sheen.setBackground(sh);
-            sheen.setAlpha(0f);
-            card.addView(sheen, new FrameLayout.LayoutParams(-1, -1));
-
-            LinearLayout col = new LinearLayout(this);
-            col.setOrientation(LinearLayout.VERTICAL);
-            col.setClipChildren(false);
-            col.addView(card, new LinearLayout.LayoutParams(px(150), px(84)));
-            TextView title = text(12, pal.text, "sans-serif-medium");
-            title.setText(it.title);
-            title.setMaxLines(2);
-            title.setEllipsize(TextUtils.TruncateAt.END);
-            title.setLineSpacing(0, 0.95f);
-            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(px(150), -2);
-            tl.topMargin = px(6);
-            col.addView(title, tl);
-            TextView meta = text(11, pal.sub, "sans-serif");
-            meta.setText(it.time > 0 ? Recents.ago(it.time) : News.SOURCE);
-            col.addView(meta);
-
-            card.setOnFocusChangeListener((v, has) -> {
-                v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).translationZ(has ? px(12) : 0)
-                        .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
-                sheen.animate().alpha(has ? 1f : 0f).setDuration(170).start();
-                if (has) animateGlow(tint);
-            });
-            card.setOnKeyListener((v, code, ev) -> {
-                if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN) {
-                    tabs[PAGE_HOME].requestFocus();
-                    return true;
-                }
-                return false;
-            });
-            card.setOnClickListener(v -> openLink(it.link));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-            lp.rightMargin = px(14);
-            newsList.addView(col, lp);
-        }
-        recentEmpty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
-        if (hadFocus && newsList.getChildCount() > 0) newsList.getChildAt(0).findViewWithTag(TAG_CARD).requestFocus();
-    }
-
-    private String favCsv() {
-        return prefs.getString("teams", Matches.DEFAULT_FAVS);
-    }
-
-    private void chooseTeams() {
-        final String[] ids = Matches.TEAMS.keySet().toArray(new String[0]);
-        final String[] names = Matches.TEAMS.values().toArray(new String[0]);
-        final List<String> cur = Matches.favs(favCsv());
-        final boolean[] on = new boolean[ids.length];
-        for (int i = 0; i < ids.length; i++) on[i] = cur.contains(ids[i]);
-        new AlertDialog.Builder(this, pal.light ? android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
-                : android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setTitle("Equipos favoritos")
-                .setMultiChoiceItems(names, on, (d, w, checked) -> on[w] = checked)
-                .setPositiveButton("Guardar", (d, w) -> {
-                    List<String> sel = new ArrayList<>();
-                    for (int i = 0; i < ids.length; i++) if (on[i]) sel.add(ids[i]);
-                    prefs.edit().putString("teams", TextUtils.join(",", sel)).apply();
-                    teamsRow.setText("Equipos favoritos (" + sel.size() + ")");
-                    newsAt = 0;
-                    newsList.removeAllViews();
-                    recentEmpty.setVisibility(View.VISIBLE);
-                    recentEmpty.setText("Buscando los partidos de tus equipos…");
-                    if ("matches".equals(cardMode)) refreshNews();
-                })
-                .setNegativeButton("Cancelar", null)
-                .show();
-    }
-
-    /** Recuadros de partido: escudo local · hora o marcador · escudo visitante; debajo, equipos y torneo. */
-    private void showMatches(List<Matches.Match> ms) {
-        boolean hadFocus = newsList.findFocus() != null;
-        newsList.removeAllViews();
-        liveShown = false;
-        SimpleDateFormat day = new SimpleDateFormat("EEE d MMM", ES);
-        final boolean h24 = DateFormat.is24HourFormat(this);
-        SimpleDateFormat hour = new SimpleDateFormat(h24 ? "H:mm" : "h:mm", ES);
-        Calendar today = Calendar.getInstance();
-        for (final Matches.Match m : ms) {
-            liveShown |= m.live();
-            final FrameLayout card = new FrameLayout(this);
-            card.setTag(TAG_CARD);
-            card.setFocusable(true);
-            card.setClipToOutline(true);
-            final int radius = px(12);
-            card.setOutlineProvider(new ViewOutlineProvider() {
-                @Override
-                public void getOutline(View v, Outline o) {
-                    o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
-                }
-            });
-            card.setBackgroundColor(pal.light ? 0xFFFFFFFF : 0x26FFFFFF);
-
-            LinearLayout face = new LinearLayout(this);
-            face.setGravity(Gravity.CENTER);
-            face.setPadding(px(6), 0, px(6), 0);
-            face.addView(crest(m.home), new LinearLayout.LayoutParams(px(36), px(36)));
-            LinearLayout mid = new LinearLayout(this);
-            mid.setOrientation(LinearLayout.VERTICAL);
-            mid.setGravity(Gravity.CENTER);
-            TextView big = text(m.live() || "post".equals(m.state) ? 18 : 14, pal.text, "sans-serif-medium");
-            TextView small = text(10, pal.sub, "sans-serif-medium");
-            Calendar when = Calendar.getInstance();
-            when.setTimeInMillis(m.time);
-            if (m.live()) {
-                big.setText(m.home.score + " - " + m.away.score);
-                small.setText("EN VIVO " + m.clock);
-                small.setTextColor(0xFFFF3B30);
-            } else {
-                // "2:00 pm" en una sola línea (el "p. m." del sistema se partía en dos).
-                big.setText(hour.format(when.getTime()) + (h24 ? "" : when.get(Calendar.HOUR_OF_DAY) < 12 ? " am" : " pm"));
-                big.setSingleLine(true);
-                boolean isToday = when.get(Calendar.YEAR) == today.get(Calendar.YEAR)
-                        && when.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR);
-                String d = isToday ? "Hoy" : day.format(when.getTime()).replace(".", "");
-                small.setText(Character.toUpperCase(d.charAt(0)) + d.substring(1));
-            }
-            big.setGravity(Gravity.CENTER_HORIZONTAL);
-            small.setGravity(Gravity.CENTER_HORIZONTAL);
-            mid.addView(big, new LinearLayout.LayoutParams(-1, -2));
-            mid.addView(small, new LinearLayout.LayoutParams(-1, -2));
-            face.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
-            face.addView(crest(m.away), new LinearLayout.LayoutParams(px(36), px(36)));
-            card.addView(face, new FrameLayout.LayoutParams(-1, -1));
-
-            View sheen = new View(this);
-            GradientDrawable sh = new GradientDrawable();
-            sh.setCornerRadius(radius);
-            sh.setStroke(Math.max(1, px(1)), pal.light ? 0x26000000 : 0x80FFFFFF);
-            sheen.setBackground(sh);
-            sheen.setAlpha(0f);
-            card.addView(sheen, new FrameLayout.LayoutParams(-1, -1));
-
-            LinearLayout col = new LinearLayout(this);
-            col.setOrientation(LinearLayout.VERTICAL);
-            col.setClipChildren(false);
-            col.addView(card, new LinearLayout.LayoutParams(px(150), px(84)));
-            TextView title = text(12, pal.text, "sans-serif-medium");
-            title.setText(m.home.name + " vs " + m.away.name);
-            title.setMaxLines(2);
-            title.setEllipsize(TextUtils.TruncateAt.END);
-            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(px(150), -2);
-            tl.topMargin = px(6);
-            col.addView(title, tl);
-            TextView meta = text(11, pal.sub, "sans-serif");
-            meta.setText(m.league);
-            col.addView(meta);
-
-            final int tint = crestColor(m.home.crest != null ? m.home.crest : m.away.crest);
-            card.setOnFocusChangeListener((v, has) -> {
-                v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).translationZ(has ? px(12) : 0)
-                        .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
-                sheen.animate().alpha(has ? 1f : 0f).setDuration(170).start();
-                if (has) animateGlow(tint);
-            });
-            card.setOnKeyListener((v, code, ev) -> {
-                if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN) {
-                    tabs[PAGE_HOME].requestFocus();
-                    return true;
-                }
-                return false;
-            });
-            card.setOnClickListener(v -> openLink(m.link));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-            lp.rightMargin = px(14);
-            newsList.addView(col, lp);
-        }
-        recentEmpty.setVisibility(ms.isEmpty() ? View.VISIBLE : View.GONE);
-        if (hadFocus && newsList.getChildCount() > 0) newsList.getChildAt(0).findViewWithTag(TAG_CARD).requestFocus();
-    }
-
-    private View crest(Matches.Team t) {
-        if (t.crest != null) {
-            ImageView img = new ImageView(this);
-            img.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            img.setImageBitmap(t.crest);
-            return img;
-        }
-        TextView initials = text(14, pal.sub, "sans-serif-medium");
-        initials.setGravity(Gravity.CENTER);
-        initials.setText(t.name.length() > 3 ? t.name.substring(0, 3).toUpperCase(ES) : t.name);
-        return initials;
-    }
-
-    /** Color medio del escudo, ignorando transparente y casi blanco/negro, para teñir el fondo. */
-    private static int crestColor(Bitmap b) {
-        if (b == null) return 0xFF8E8E93;
-        Bitmap s = Bitmap.createScaledBitmap(b, 12, 12, true);
-        long r = 0, g = 0, bl = 0, n = 0;
-        float[] hsv = new float[3];
-        for (int y = 0; y < 12; y++) {
-            for (int x = 0; x < 12; x++) {
-                int p = s.getPixel(x, y);
-                if (Color.alpha(p) < 128) continue;
-                Color.colorToHSV(p, hsv);
-                if (hsv[1] < 0.25f) continue;
-                r += Color.red(p);
-                g += Color.green(p);
-                bl += Color.blue(p);
-                n++;
-            }
-        }
-        s.recycle();
-        return n == 0 ? 0xFF8E8E93 : Color.rgb((int) (r / n), (int) (g / n), (int) (bl / n));
-    }
-
-    /** Abre la noticia en Silk (el navegador de Fire TV) o en el que haya. */
-    private void openLink(String url) {
-        if (url == null) return;
-        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-        i.setPackage("com.amazon.cloud9");
-        try {
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(i);
-        } catch (Exception e) {
-            startSafe(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-        }
-    }
-
-    private void buildRecents() {
-        if (newsMode) return;
-        recentRow.removeAllViews();
-        Set<String> hidden = hidden();
-        for (Recents.Item it : recents) {
-            AppEntry a = findApp(it.pkg);
-            if (a == null || hidden.contains(it.pkg)) continue;
-            recentRow.addView(makeTile(a, KIND_RECENT, px(150), px(84), Recents.ago(it.time)));
-            if (recentRow.getChildCount() == RECENT_MAX) break;
-        }
-        boolean empty = recentRow.getChildCount() == 0;
-        recentRow.setVisibility(empty ? View.GONE : View.VISIBLE);
-        recentEmpty.setVisibility(empty ? View.VISIBLE : View.GONE);
-    }
-
-    private View makeTile(final AppEntry a, final int kind, int w, int h, String subtitle) {
+    private View makeTile(final AppEntry a, final int kind, int w, int h) {
         final FrameLayout card = new FrameLayout(this);
         card.setTag(TAG_CARD);
         card.setTag(R_APP, a);
         card.setTag(R_KIND, kind);
         card.setFocusable(true);
-        card.setClipToOutline(true);
-        final int radius = px(12);
-        card.setOutlineProvider(new ViewOutlineProvider() {
-            @Override
-            public void getOutline(View v, Outline o) {
-                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
-            }
-        });
+        rounded(card, px(12));
         if (a.banner != null) {
             ImageView img = new ImageView(this);
             img.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -946,13 +619,7 @@ public class HomeActivity extends Activity {
             int s = Math.round(h * 0.62f);
             card.addView(img, new FrameLayout.LayoutParams(s, s, Gravity.CENTER));
         }
-        GradientDrawable sheenBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0x40FFFFFF, 0x0AFFFFFF, 0x00FFFFFF});
-        sheenBg.setCornerRadius(radius);
-        sheenBg.setStroke(Math.max(1, px(1)), 0x66FFFFFF);
-        final View sheen = new View(this);
-        sheen.setBackground(sheenBg);
-        sheen.setAlpha(0f);
+        final View sheen = sheen(px(12), 0x66FFFFFF);
         card.addView(sheen, new FrameLayout.LayoutParams(-1, -1));
 
         LinearLayout col = new LinearLayout(this);
@@ -963,21 +630,14 @@ public class HomeActivity extends Activity {
         label.setText(a.label);
         label.setSingleLine(true);
         label.setEllipsize(TextUtils.TruncateAt.END);
+        label.setGravity(Gravity.CENTER_HORIZONTAL);
+        label.setAlpha(0f);
         LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(w, -2);
         ll.topMargin = px(kind == KIND_DOCK ? 8 : 10);
         col.addView(label, ll);
-        final boolean labelAlways = kind == KIND_RECENT;
-        if (labelAlways) {
-            TextView sub = text(11, pal.sub, "sans-serif");
-            sub.setText(subtitle);
-            col.addView(sub);
-        } else {
-            label.setGravity(Gravity.CENTER_HORIZONTAL);
-            label.setAlpha(0f);
-        }
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
         int gap = kind == KIND_DOCK ? px(7) : px(10);
-        cp.setMargins(kind == KIND_RECENT ? 0 : gap, 0, kind == KIND_RECENT ? px(14) : gap, 0);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -2);
+        cp.setMargins(gap, 0, gap, 0);
         col.setLayoutParams(cp);
 
         card.setOnFocusChangeListener((v, has) -> {
@@ -985,8 +645,18 @@ public class HomeActivity extends Activity {
             v.animate().scaleX(s).scaleY(s).translationZ(has ? px(14) : 0)
                     .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
             sheen.animate().alpha(has ? 1f : 0f).setDuration(170).start();
-            if (!labelAlways) label.animate().alpha(has ? 1f : 0f).translationY(has ? px(4) : 0).setDuration(170).start();
-            if (has) animateGlow(a.glow);
+            label.animate().alpha(has ? 1f : 0f).translationY(has ? px(4) : 0).setDuration(170).start();
+            if (has) {
+                animateGlow(a.glow);
+                if (kind == KIND_DOCK) {
+                    homeScroll.smoothScrollTo(0, 0);
+                } else {
+                    // La fila de apps con foco queda a media pantalla, entera y con su nombre visible.
+                    View row = (View) col.getParent();
+                    int rowTop = appsGrid.getTop() + row.getTop();
+                    homeScroll.smoothScrollTo(0, Math.max(0, rowTop - px(200)));
+                }
+            }
         });
         card.setOnClickListener(v -> startSafe(a.launchIntent()));
         card.setOnLongClickListener(v -> {
@@ -998,14 +668,10 @@ public class HomeActivity extends Activity {
                 if (ev.getAction() == KeyEvent.ACTION_UP) showMenu(a, kind == KIND_DOCK);
                 return true;
             }
-            if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN) {
-                boolean top = kind == KIND_RECENT
-                        || (kind == KIND_DOCK && (newsMode ? newsList : recentRow).getChildCount() == 0)
-                        || (kind == KIND_GRID && appsGrid.indexOfChild((View) col.getParent()) == 0);
-                if (top) {
-                    tabs[page].requestFocus();
-                    return true;
-                }
+            if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN
+                    && kind == KIND_DOCK && matchRow.getChildCount() == 0) {
+                tabs[PAGE_HOME].requestFocus();
+                return true;
             }
             return false;
         });
@@ -1032,18 +698,16 @@ public class HomeActivity extends Activity {
             labels.add("Quitar del dock");
             acts.add(() -> { d.remove(a.pkg); saveDock(d); refocus(null, true); });
         } else {
-            if (i < 0) {
-                labels.add("Añadir al dock");
-                acts.add(() -> {
-                    if (d.size() >= DOCK_MAX) {
-                        toast("El dock está lleno (máximo " + DOCK_MAX + "). Quita una app primero.");
-                    } else {
-                        d.add(a.pkg);
-                        saveDock(d);
-                        refocus(a.pkg, false);
-                    }
-                });
-            }
+            labels.add("Añadir al dock");
+            acts.add(() -> {
+                if (d.size() >= DOCK_MAX) {
+                    toast("El dock está lleno (máximo " + DOCK_MAX + "). Quita una app primero.");
+                } else {
+                    d.add(a.pkg);
+                    saveDock(d);
+                    refocus(a.pkg, true);
+                }
+            });
             labels.add("Ocultar app");
             acts.add(() -> {
                 hidden.add(a.pkg);
@@ -1085,16 +749,18 @@ public class HomeActivity extends Activity {
     }
 
     private View findTile(String pkg, boolean inDock) {
-        AppEntry a = findApp(pkg);
+        if (pkg == null) return null;
+        AppEntry a = null;
+        for (AppEntry e : all) if (e.pkg.equals(pkg)) a = e;
         if (a == null) return null;
-        View parent = inDock ? dock : (page == PAGE_APPS ? appsGrid : pages[PAGE_HOME]);
-        return findCard(parent, a);
+        View r = findCard(inDock ? dock : appsGrid, a);
+        return r != null ? r : findCard(inDock ? appsGrid : dock, a);
     }
 
     private static View findCard(View v, AppEntry a) {
         if (v.getTag(R_APP) == a) return v;
-        if (v instanceof android.view.ViewGroup) {
-            android.view.ViewGroup g = (android.view.ViewGroup) v;
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
             for (int i = 0; i < g.getChildCount(); i++) {
                 View r = findCard(g.getChildAt(i), a);
                 if (r != null) return r;
@@ -1103,10 +769,184 @@ public class HomeActivity extends Activity {
         return null;
     }
 
-    private AppEntry findApp(String pkg) {
-        if (pkg == null) return null;
-        for (AppEntry a : all) if (a.pkg.equals(pkg)) return a;
-        return null;
+    // ---------------------------------------------------------------- partidos
+
+    /** Partidos cada 10 min (cada minuto si hay uno en vivo) y clima cada 30, solo con la pantalla a la vista. */
+    private void refreshData() {
+        if (!visible) return;
+        long now = System.currentTimeMillis();
+        if (now - weatherAt >= WEATHER_EVERY) {
+            weatherAt = now;
+            io.execute(() -> {
+                try {
+                    final Weather w = Weather.fetch();
+                    ui.post(() -> showWeather(w));
+                } catch (Exception e) {
+                    weatherAt = 0; // sin red: se reintenta al minuto siguiente
+                }
+            });
+        }
+        if (now - matchesAt >= (liveShown ? LIVE_EVERY : MATCHES_EVERY)) {
+            matchesAt = now;
+            io.execute(() -> {
+                final List<Matches.Match> ms = Matches.fetch(MATCH_MAX);
+                ui.post(() -> {
+                    if (ms.isEmpty()) {
+                        matchesAt = 0;
+                        if (matchRow.getChildCount() == 0) matchEmpty.setText("Sin partidos cercanos o sin conexión.");
+                        return;
+                    }
+                    showMatches(ms);
+                });
+            });
+        }
+    }
+
+    /** Recuadros: escudo local · hora, marcador en vivo o resultado final · escudo visitante. */
+    private void showMatches(List<Matches.Match> ms) {
+        View f = matchRow.findFocus();
+        int focusIdx = f == null ? -1 : matchRow.indexOfChild((View) f.getParent());
+        matchRow.removeAllViews();
+        liveShown = false;
+        final boolean h24 = DateFormat.is24HourFormat(this);
+        SimpleDateFormat day = new SimpleDateFormat("EEE d MMM", ES);
+        SimpleDateFormat hour = new SimpleDateFormat(h24 ? "H:mm" : "h:mm", ES);
+        Calendar today = Calendar.getInstance();
+        for (final Matches.Match m : ms) {
+            liveShown |= m.live();
+            final FrameLayout card = new FrameLayout(this);
+            card.setTag(TAG_CARD);
+            card.setFocusable(true);
+            rounded(card, px(12));
+            card.setBackgroundColor(pal.light ? 0xFFFFFFFF : 0x26FFFFFF);
+
+            LinearLayout face = new LinearLayout(this);
+            face.setGravity(Gravity.CENTER);
+            face.setPadding(px(6), 0, px(6), 0);
+            face.addView(crest(m.home), new LinearLayout.LayoutParams(px(36), px(36)));
+            LinearLayout mid = new LinearLayout(this);
+            mid.setOrientation(LinearLayout.VERTICAL);
+            mid.setGravity(Gravity.CENTER);
+            boolean scored = m.live() || m.done();
+            TextView big = text(scored ? 20 : 15, pal.text, "sans-serif-medium");
+            TextView small = text(10, pal.sub, "sans-serif-medium");
+            big.setSingleLine(true);
+            if (scored) {
+                big.setText(m.home.score + " - " + m.away.score);
+                if (m.live()) {
+                    small.setText("● EN VIVO " + m.clock);
+                    small.setTextColor(0xFFFF3B30);
+                } else {
+                    small.setText("FINAL");
+                }
+            } else {
+                Calendar when = Calendar.getInstance();
+                when.setTimeInMillis(m.time);
+                big.setText(hour.format(when.getTime()) + (h24 ? "" : when.get(Calendar.HOUR_OF_DAY) < 12 ? " am" : " pm"));
+                boolean isToday = when.get(Calendar.YEAR) == today.get(Calendar.YEAR)
+                        && when.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR);
+                String d = isToday ? "Hoy" : day.format(when.getTime()).replace(".", "");
+                small.setText(Character.toUpperCase(d.charAt(0)) + d.substring(1));
+            }
+            big.setGravity(Gravity.CENTER_HORIZONTAL);
+            small.setGravity(Gravity.CENTER_HORIZONTAL);
+            mid.addView(big, new LinearLayout.LayoutParams(-1, -2));
+            mid.addView(small, new LinearLayout.LayoutParams(-1, -2));
+            face.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
+            face.addView(crest(m.away), new LinearLayout.LayoutParams(px(36), px(36)));
+            card.addView(face, new FrameLayout.LayoutParams(-1, -1));
+            final View sheen = sheen(px(12), pal.light ? 0x26000000 : 0x80FFFFFF);
+            card.addView(sheen, new FrameLayout.LayoutParams(-1, -1));
+
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setClipChildren(false);
+            col.addView(card, new LinearLayout.LayoutParams(px(150), px(84)));
+            TextView title = text(12, pal.text, "sans-serif-medium");
+            title.setText(m.home.name + " vs " + m.away.name);
+            title.setMaxLines(2);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(px(150), -2);
+            tl.topMargin = px(6);
+            col.addView(title, tl);
+            TextView meta = text(11, pal.sub, "sans-serif");
+            meta.setText(m.league);
+            col.addView(meta);
+
+            final int tint = crestColor(m.home.crest != null ? m.home.crest : m.away.crest);
+            card.setOnFocusChangeListener((v, has) -> {
+                v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).translationZ(has ? px(12) : 0)
+                        .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
+                sheen.animate().alpha(has ? 1f : 0f).setDuration(170).start();
+                if (has) {
+                    animateGlow(tint);
+                    homeScroll.smoothScrollTo(0, 0);
+                }
+            });
+            card.setOnKeyListener((v, code, ev) -> {
+                if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN) {
+                    tabs[PAGE_HOME].requestFocus();
+                    return true;
+                }
+                return false;
+            });
+            card.setOnClickListener(v -> openLink(m.link));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+            lp.rightMargin = px(14);
+            matchRow.addView(col, lp);
+        }
+        matchEmpty.setVisibility(ms.isEmpty() ? View.VISIBLE : View.GONE);
+        if (focusIdx >= 0 && matchRow.getChildCount() > 0) {
+            matchRow.getChildAt(Math.min(focusIdx, matchRow.getChildCount() - 1)).findViewWithTag(TAG_CARD).requestFocus();
+        }
+    }
+
+    private View crest(Matches.Team t) {
+        if (t.crest != null) {
+            ImageView img = new ImageView(this);
+            img.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            img.setImageBitmap(t.crest);
+            return img;
+        }
+        TextView initials = text(14, pal.sub, "sans-serif-medium");
+        initials.setGravity(Gravity.CENTER);
+        initials.setText(t.name.length() > 3 ? t.name.substring(0, 3).toUpperCase(ES) : t.name);
+        return initials;
+    }
+
+    /** Color medio del escudo, ignorando transparente y grises, para teñir el fondo. */
+    private static int crestColor(Bitmap b) {
+        if (b == null) return 0xFF8E8E93;
+        Bitmap s = Bitmap.createScaledBitmap(b, 12, 12, true);
+        long r = 0, g = 0, bl = 0, n = 0;
+        float[] hsv = new float[3];
+        for (int y = 0; y < 12; y++) {
+            for (int x = 0; x < 12; x++) {
+                int p = s.getPixel(x, y);
+                if (Color.alpha(p) < 128) continue;
+                Color.colorToHSV(p, hsv);
+                if (hsv[1] < 0.25f) continue;
+                r += Color.red(p);
+                g += Color.green(p);
+                bl += Color.blue(p);
+                n++;
+            }
+        }
+        s.recycle();
+        return n == 0 ? 0xFF8E8E93 : Color.rgb((int) (r / n), (int) (g / n), (int) (bl / n));
+    }
+
+    /** Abre el partido en Silk (el navegador de Fire TV) o en el que haya. */
+    private void openLink(String url) {
+        if (url == null) return;
+        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        i.setPackage("com.amazon.cloud9");
+        try {
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            startSafe(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        }
     }
 
     // ---------------------------------------------------------------- reloj, clima, red
@@ -1118,20 +958,6 @@ public class HomeActivity extends Activity {
         date.setText(Character.toUpperCase(d.charAt(0)) + d.substring(1));
         int h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
         greeting.setText(h < 5 ? "Buenas noches" : h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches");
-    }
-
-    private void refreshWeather() {
-        long now = System.currentTimeMillis();
-        if (now - weatherAt < 30 * 60 * 1000L) return;
-        weatherAt = now;
-        io.execute(() -> {
-            try {
-                final Weather w = Weather.fetch();
-                ui.post(() -> showWeather(w));
-            } catch (Exception e) {
-                weatherAt = 0; // sin red: se reintenta en el siguiente minuto
-            }
-        });
     }
 
     private void showWeather(Weather w) {
@@ -1208,7 +1034,7 @@ public class HomeActivity extends Activity {
         }
     }
 
-    // ---------------------------------------------------------------- utilidades
+    // ---------------------------------------------------------------- color y utilidades
 
     private void animateGlow(int target) {
         if (glowAnim != null) glowAnim.cancel();
@@ -1221,19 +1047,17 @@ public class HomeActivity extends Activity {
         glowAnim.start();
     }
 
+    /** Resplandor abajo y, además, todo el fondo teñido suave del color de la app o escudo con foco. */
     private void applyGlow(int c) {
         int rgb = c & 0x00FFFFFF;
         glowBg.setColors(new int[]{rgb | (pal.glowAlpha << 24), rgb | ((pal.glowAlpha / 4) << 24), 0x00000000});
-        // Todo el fondo se tiñe del color de la app, apagado: un poco arriba y más abajo.
-        if (rootBg != null) {
-            float[] hsv = new float[3];
-            Color.colorToHSV(c, hsv);
-            hsv[1] *= 0.75f;
-            int soft = Color.HSVToColor(hsv);
-            rootBg.setColors(pal.light
-                    ? new int[]{mix(pal.bgTop, soft, 0.10f), mix(pal.bgBottom, soft, 0.30f)}
-                    : new int[]{mix(pal.bgTop, soft, 0.16f), mix(pal.bgBottom, soft, 0.28f)});
-        }
+        float[] hsv = new float[3];
+        Color.colorToHSV(c, hsv);
+        hsv[1] *= 0.75f;
+        int soft = Color.HSVToColor(hsv);
+        rootBg.setColors(pal.light
+                ? new int[]{mix(pal.bgTop, soft, 0.10f), mix(pal.bgBottom, soft, 0.30f)}
+                : new int[]{mix(pal.bgTop, soft, 0.16f), mix(pal.bgBottom, soft, 0.28f)});
     }
 
     private static int mix(int a, int b, float t) {
@@ -1241,6 +1065,28 @@ public class HomeActivity extends Activity {
                 Math.round(Color.red(a) + (Color.red(b) - Color.red(a)) * t),
                 Math.round(Color.green(a) + (Color.green(b) - Color.green(a)) * t),
                 Math.round(Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t));
+    }
+
+    private void rounded(View v, final int radius) {
+        v.setClipToOutline(true);
+        v.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline o) {
+                o.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radius);
+            }
+        });
+    }
+
+    /** Borde fino y brillo de cristal que aparecen con el foco. */
+    private View sheen(int radius, int stroke) {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{0x40FFFFFF, 0x0AFFFFFF, 0x00FFFFFF});
+        g.setCornerRadius(radius);
+        g.setStroke(Math.max(1, px(1)), stroke);
+        View v = new View(this);
+        v.setBackground(g);
+        v.setAlpha(0f);
+        return v;
     }
 
     private LinearLayout card() {

@@ -56,7 +56,6 @@ adb install -r InicioATV.apk
 adb shell settings put secure enabled_accessibility_services com.josue.atvhome/com.josue.atvhome.HomeService
 adb shell settings put secure accessibility_enabled 1
 adb shell pm grant com.josue.atvhome android.permission.ACCESS_FINE_LOCATION   # opcional: muestra el nombre del Wi-Fi
-adb shell appops set com.josue.atvhome GET_USAGE_STATS allow                    # opcional: tarjeta "Recientes"
 adb shell pm grant com.josue.atvhome android.permission.WRITE_SECURE_SETTINGS   # opcional: reactiva solo el botón Inicio si Fire OS lo apaga
 ```
 
@@ -86,7 +85,7 @@ adb shell pm grant com.josue.atvhome android.permission.WRITE_SECURE_SETTINGS   
 <table>
 <tr>
 <td width="50%"><img src="docs/inicio.png" alt="Inicio"><br><i>Inicio: saludo, próximos partidos con escudos, clima por horas de Milagro y dock.</i></td>
-<td width="50%"><img src="docs/apps.png" alt="Apps"><br><i>Pestaña Apps: todas tus apps. La que tiene el foco crece y muestra su nombre.</i></td>
+<td width="50%"><img src="docs/apps.png" alt="Apps"><br><i>Bajando desde el dock: todas tus apps. La que tiene el foco crece y muestra su nombre.</i></td>
 </tr>
 <tr>
 <td width="50%"><img src="docs/oscuro.png" alt="Tema oscuro"><br><i>Tema oscuro, en Ajustes. El fondo se tiñe del color de la app con foco.</i></td>
@@ -98,7 +97,8 @@ adb shell pm grant com.josue.atvhome android.permission.WRITE_SECURE_SETTINGS   
 |---|---|
 | OK | Abrir |
 | Menú ☰ / mantener OK | Opciones de la app |
-| ↑ hasta arriba | Pestañas Inicio / Apps / Ajustes |
+| ↓ desde el dock | Todas las apps |
+| ↑ hasta arriba | Pestañas Inicio / Ajustes |
 | Atrás | Volver al dock |
 | Inicio | Siempre aquí |
 
@@ -173,15 +173,13 @@ Todo se hace con `pm disable-user --user 0`: **nada se borra** y se reactiva con
 
 | Función | Detalle |
 |---|---|
-| Pestañas | **Inicio**, **Apps** y **Ajustes** arriba, como en tvOS. Al enfocar una pestaña cambia la página |
+| Pestañas | **Inicio** y **Ajustes** arriba, como en tvOS. Al bajar a las apps, la barra se desvanece |
 | Saludo y reloj | "Buenos días / tardes / noches", la fecha en español y la hora arriba a la derecha |
-| ⚽ Próximos partidos | Tarjeta por defecto: los 3 próximos partidos de tus **equipos favoritos** (Ecuador, Barcelona SC, Emelec, Liga de Quito, Real Madrid, FC Barcelona…; se eligen en Ajustes) con **escudos**, hora, fecha y torneo. En vivo muestra el marcador y se actualiza cada 2 min. Datos de la API pública de ESPN leídos en streaming; escudos de 96 px (~9 KB) |
-| 📰 Noticias | Tarjeta con las 3 últimas noticias **con foto** de [El Universo](https://www.eluniverso.com) (RSS leído en streaming; cada foto se decodifica ya reducida, en RGB565, ~150 KB). El fondo se tiñe del color de la foto con foco; OK la abre en Silk. Se actualiza cada 30 minutos |
-| 🕘 Recientes | Alternativa a Noticias (en Ajustes): las 3 últimas apps que abriste y hace cuánto. Necesita el permiso de acceso al uso (`appops`) |
+| ⚽ Partidos | Tarjeta con hasta 8 partidos de **Emelec**, **Real Madrid** y la **Champions League**, con **escudos**: **en vivo** (marcador y minuto), **resultados finales** de las últimas 30 h y **próximos** (hora y fecha). Se desplaza a los lados. OK abre el partido en ESPN. Datos de la API pública de ESPN leídos en streaming; los días sin partidos pesan ~2 KB y los escudos ~9 KB |
 | 🌤️ Clima | Tarjeta con temperatura, estado, máxima/mínima y las próximas 4 horas de la ciudad de tu zona horaria, con [Open-Meteo](https://open-meteo.com) (sin cuenta ni ubicación). Se actualiza cada 30 minutos |
 | Dock | Hasta 6 apps. Por defecto: Netflix, Disney+, YouTube, Crunchyroll, Stremio y Paramount+ |
-| Apps | Todas tus apps en orden alfabético, en cuadrícula de 6 |
-| Ajustes | Wi-Fi (con el nombre de la red), Ajustes de Fire TV, inicio de Amazon, **tema claro u oscuro**, **tarjeta de partidos, noticias o recientes**, **equipos favoritos** y apps ocultas |
+| Apps | Debajo del dock: el resto de apps en orden alfabético, en cuadrícula de 6 |
+| Ajustes | Wi-Fi (con el nombre de la red), Ajustes de Fire TV, inicio de Amazon, **tema claro u oscuro** y apps ocultas |
 | Fondo con color | Al enfocar una app, **todo el fondo se tiñe suavemente** de su color (rojo apagado con Netflix, melocotón con Crunchyroll…), con transición suave |
 | Limpieza | Oculta las herramientas internas de Fire OS que salen con icono genérico |
 | Se repara solo | Si Fire OS apaga el servicio del botón Inicio, Inicio ATV lo vuelve a encender al abrirse (con el permiso `WRITE_SECURE_SETTINGS`) |
@@ -242,7 +240,6 @@ powershell -ExecutionPolicy Bypass -File tools\restaurar.ps1 -Todo   # y además
 - 🔌 **`unauthorized` al conectar:** acepta el aviso en la TV. Si no sale, pulsa Inicio para despertarla y vuelve a ejecutar `adb connect`.
 - 🏠 **Vuelve a salir la pantalla de Amazon:** una actualización ha apagado el servicio. Ve a *Ajustes → Accesibilidad → Inicio ATV → Activar*. Fire OS también lo apaga si fuerzas el cierre de Inicio ATV (`am force-stop`): al actualizar, usa solo `adb install -r`.
 - 🌤️ **No sale el clima:** necesita internet. Si no hay red, se reintenta cada minuto.
-- 🕘 **No sale la tarjeta Recientes:** falta el permiso. Ejecuta `adb shell appops set com.josue.atvhome GET_USAGE_STATS allow`.
 - 📶 **El botón dice "Wi-Fi" sin el nombre de la red:** falta el permiso de ubicación. Ejecuta el `pm grant` del inicio rápido.
 - 🖤 **`adb screencap` sale negro:** la TV está en reposo. Ejecuta `adb shell input keyevent KEYCODE_WAKEUP`.
 - 🔁 **Después de actualizar Fire OS vuelve alguna app de Amazon:** vuelve a ejecutar `optimizar.ps1`. Se puede repetir sin problema.
@@ -280,12 +277,17 @@ No. Mientras está activada, cualquiera en tu red puede intentar conectarse (aun
 
 <details><summary><b>¿Por qué no hay "Seguir viendo" como en Apple TV?</b></summary>
 
-Lo probamos. La lista del sistema (`content://android.media.tv/watch_next_program`) existe en Fire OS 8, pero **está vacía**: Netflix, Disney+, YouTube y las demás apps de Fire TV no publican ahí lo que estás viendo. La fila **Recientes** es lo más parecido que se puede hacer.
+Lo probamos. La lista del sistema (`content://android.media.tv/watch_next_program`) existe en Fire OS 8, pero **está vacía**: Netflix, Disney+, YouTube y las demás apps de Fire TV no publican ahí lo que estás viendo. 
 </details>
 
 <details><summary><b>¿El clima es de mi ciudad?</b></summary>
 
 Usa una ciudad según tu zona horaria: `America/Guayaquil` → **Milagro**, `America/Bogota` → Bogotá, etc. Para otra ciudad, edita `cityFor` en `Weather.java`.
+</details>
+
+<details><summary><b>¿Se actualizan solos el clima y los partidos?</b></summary>
+
+Sí, **mientras la pantalla de inicio está a la vista**: el clima cada 30 minutos y los partidos cada 10, o **cada minuto si hay uno en vivo** (marcador y minuto). Al volver de una app se actualiza al momento si toca. Mientras ves Netflix u otra app no se descarga nada.
 </details>
 
 <details><summary><b>¿Puedo cambiar las apps del dock?</b></summary>
@@ -298,7 +300,7 @@ Sí. Pulsa Menú ☰ sobre cualquier app: *Añadir al dock*, *Quitar del dock*, 
 ## 🙏 Créditos
 
 - Inspirado en [CleanYourTV](https://github.com/Gathin23/cleanyourtv) de Gathin23, que limpia Android TV y Google TV. Este proyecto lleva la idea a Fire TV, donde aquel no funciona.
-- Las ideas del clima con Open-Meteo y de la fila de apps recientes vienen de [Luma TV](https://github.com/0xProbabillity/luma-tv) de 0xProbabillity (MIT).
+- La idea del clima con Open-Meteo viene de [Luma TV](https://github.com/0xProbabillity/luma-tv) de 0xProbabillity (MIT).
 - Hecho con [Claude Code](https://claude.com/claude-code).
 
 ## ⚖️ Aviso legal
