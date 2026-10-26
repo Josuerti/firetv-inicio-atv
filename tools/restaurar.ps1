@@ -4,6 +4,7 @@
 param([switch]$Todo, [string]$Ip = "192.168.100.13")
 $adb = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
 & $adb connect "${Ip}:5555"
+$env:ANDROID_SERIAL = "${Ip}:5555" # solo la TV, aunque haya un móvil conectado por USB
 
 "Quitando Inicio ATV..."
 # Antes de instalar no había ningún servicio de accesibilidad activo (ver backup\*\settings-secure.txt)

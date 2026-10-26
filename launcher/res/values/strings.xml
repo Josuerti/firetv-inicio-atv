@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Inicio ATV</string>
-    <string name="a11y_desc">Hace que el botón Inicio del mando abra Inicio ATV en lugar de la pantalla de Amazon. Solo mira qué app está en primer plano; no lee ni guarda nada más.</string>
+    <string name="a11y_desc">Hace que el botón Inicio del mando abra Inicio ATV en lugar de la pantalla de Amazon. Solo mira qué app está en primer plano y, dentro de la pantalla de Amazon, si estás en la tienda o en la portada; no lee ni guarda nada más.</string>
 </resources>

@@ -5,6 +5,7 @@ param([string]$Ip = "192.168.100.13")
 $adb = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
 if (-not (Test-Path $adb)) { $adb = "adb" }
 & $adb connect "${Ip}:5555"
+$env:ANDROID_SERIAL = "${Ip}:5555" # solo la TV, aunque haya un móvil conectado por USB
 
 # Respaldo antes de tocar nada
 $b = Join-Path $PSScriptRoot "..\backup\$(Get-Date -Format yyyyMMdd-HHmmss)"

@@ -285,6 +285,11 @@ Lo probamos. La lista del sistema (`content://android.media.tv/watch_next_progra
 Usa una ciudad según tu zona horaria: `America/Guayaquil` → **Milagro**, `America/Bogota` → Bogotá, etc. Para otra ciudad, edita `cityFor` en `Weather.java`.
 </details>
 
+<details><summary><b>¿Puedo usar la tienda de apps (Appstore)?</b></summary>
+
+Sí. En Fire OS 8 la tienda se muestra **dentro** de la pantalla de Amazon, así que Inicio ATV la deja abierta mientras navegas por ella (sabe que estás en la tienda por su pestaña *Categorías*). En cuanto sales a la portada de Amazon (Atrás o Inicio), vuelves a Inicio ATV.
+</details>
+
 <details><summary><b>¿Se actualizan solos el clima y los partidos?</b></summary>
 
 Sí, **mientras la pantalla de inicio está a la vista**: el clima cada 30 minutos y los partidos cada 10, o **cada minuto si hay uno en vivo** (marcador y minuto). Al volver de una app se actualiza al momento si toca. Mientras ves Netflix u otra app no se descarga nada.

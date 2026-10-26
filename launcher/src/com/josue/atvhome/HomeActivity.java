@@ -173,6 +173,8 @@ public class HomeActivity extends Activity {
         updateWifi();
         refreshData();
         ensureHomeService();
+        HomeService.allowAmazon = false; // de vuelta aquí: el botón Inicio vuelve a traer Inicio ATV
+        HomeService.allowUntil = 0;
     }
 
     @Override
@@ -455,7 +457,7 @@ public class HomeActivity extends Activity {
             rebuild();
         });
         TextView about = text(13, pal.sub, "sans-serif");
-        about.setText("Inicio ATV 2.4 · github.com/Josuerti/firetv-inicio-atv");
+        about.setText("Inicio ATV 2.5 · github.com/Josuerti/firetv-inicio-atv");
         LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-2, -2);
         al.topMargin = px(18);
         settingsList.addView(about, al);
@@ -658,7 +660,11 @@ public class HomeActivity extends Activity {
                 }
             }
         });
-        card.setOnClickListener(v -> startSafe(a.launchIntent()));
+        card.setOnClickListener(v -> {
+            // La Appstore se abre dentro de la home de Amazon: avisamos al servicio para no taparla.
+            if (HomeService.OPENS_AMAZON_HOME.contains(a.pkg)) HomeService.allowDeepLink();
+            startSafe(a.launchIntent());
+        });
         card.setOnLongClickListener(v -> {
             showMenu(a, kind == KIND_DOCK);
             return true;
