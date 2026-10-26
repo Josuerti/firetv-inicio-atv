@@ -106,11 +106,15 @@ public class HomeActivity extends Activity {
     private final View[] pages = new View[3];
     private int page = PAGE_HOME;
 
-    private TextView clock, greeting, date, wifiRow, themeRow, hiddenRow, recentEmpty, cardTitle;
+    private TextView clock, greeting, date, wifiRow, themeRow, hiddenRow, teamsRow, recentEmpty, cardTitle;
     private LinearLayout dock, recentRow, newsList, appsGrid, settingsList;
     /** La tarjeta grande muestra noticias (por defecto) o apps recientes. */
     private boolean newsMode;
+    /** "matches" (próximos partidos, por defecto), "news" o "recents". */
+    private String cardMode;
     private long newsAt;
+    private GradientDrawable rootBg;
+    private boolean liveShown;
     private ScrollView appsScroll;
     // Tarjeta de clima
     private TextView wCity, wIcon, wTemp, wDesc;
@@ -133,7 +137,8 @@ public class HomeActivity extends Activity {
         screenW = getResources().getDisplayMetrics().widthPixels;
         prefs = getSharedPreferences("atv", MODE_PRIVATE);
         pal = new Palette(!"dark".equals(prefs.getString("theme", "light")));
-        newsMode = !"recents".equals(prefs.getString("card", "news"));
+        cardMode = prefs.getString("card", "matches");
+        newsMode = !"recents".equals(cardMode); // noticias y partidos usan la misma fila de recuadros
         setContentView(buildChrome());
 
         IntentFilter pf = new IntentFilter();
@@ -228,8 +233,8 @@ public class HomeActivity extends Activity {
 
     private View buildChrome() {
         FrameLayout root = new FrameLayout(this);
-        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{pal.bgTop, pal.bgBottom}));
+        rootBg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[]{pal.bgTop, pal.bgBottom});
+        root.setBackground(rootBg);
 
         glowBg = new GradientDrawable();
         glowBg.setGradientType(GradientDrawable.RADIAL_GRADIENT);
@@ -315,7 +320,8 @@ public class HomeActivity extends Activity {
         recentCard.setOrientation(LinearLayout.VERTICAL);
         recentCard.setClipChildren(false);
         cardTitle = text(13, pal.sub, "sans-serif-medium");
-        cardTitle.setText(newsMode ? "Noticias · " + News.SOURCE : "Recientes");
+        cardTitle.setText("matches".equals(cardMode) ? "Próximos partidos"
+                : newsMode ? "Noticias · " + News.SOURCE : "Recientes");
         recentCard.addView(cardTitle);
         recentRow = new LinearLayout(this);
         recentRow.setClipChildren(false);
@@ -330,7 +336,8 @@ public class HomeActivity extends Activity {
         nll.topMargin = px(10);
         recentCard.addView(newsList, nll);
         recentEmpty = text(14, pal.sub, "sans-serif");
-        recentEmpty.setText(newsMode ? "Cargando titulares…" : "Las apps que abras aparecerán aquí.");
+        recentEmpty.setText("matches".equals(cardMode) ? "Buscando los partidos de tus equipos…"
+                : newsMode ? "Cargando titulares…" : "Las apps que abras aparecerán aquí.");
         recentCard.addView(recentEmpty);
         recentRow.setVisibility(newsMode ? View.GONE : View.VISIBLE);
         newsList.setVisibility(newsMode ? View.VISIBLE : View.GONE);
@@ -430,17 +437,20 @@ public class HomeActivity extends Activity {
             prefs.edit().putString("theme", pal.light ? "dark" : "light").apply();
             recreate();
         });
-        settingRow(newsMode ? "Tarjeta de inicio: noticias" : "Tarjeta de inicio: apps recientes", v -> {
-            prefs.edit().putString("card", newsMode ? "recents" : "news").apply();
+        String cardLabel = "matches".equals(cardMode) ? "próximos partidos" : newsMode ? "noticias" : "apps recientes";
+        settingRow("Tarjeta de inicio: " + cardLabel, v -> {
+            String next = "matches".equals(cardMode) ? "news" : newsMode ? "recents" : "matches";
+            prefs.edit().putString("card", next).apply();
             recreate();
         });
+        teamsRow = settingRow("Equipos favoritos (" + Matches.favs(favCsv()).size() + ")", v -> chooseTeams());
         hiddenRow = settingRow("Mostrar apps ocultas", v -> {
             prefs.edit().remove("hidden").apply();
             toast("Apps ocultas visibles otra vez");
             rebuild();
         });
         TextView about = text(13, pal.sub, "sans-serif");
-        about.setText("Inicio ATV 2.2 · github.com/Josuerti/firetv-inicio-atv");
+        about.setText("Inicio ATV 2.3 · github.com/Josuerti/firetv-inicio-atv");
         LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-2, -2);
         al.topMargin = px(18);
         settingsList.addView(about, al);
@@ -605,6 +615,24 @@ public class HomeActivity extends Activity {
 
     private void refreshNews() {
         long now = System.currentTimeMillis();
+        if ("matches".equals(cardMode)) {
+            // Partidos: cada 15 min, o cada 2 min mientras alguno está en vivo.
+            if (now - newsAt < (liveShown ? 2 : 15) * 60 * 1000L) return;
+            newsAt = now;
+            final List<String> favs = Matches.favs(favCsv());
+            io.execute(() -> {
+                final List<Matches.Match> ms = Matches.fetch(favs, 3);
+                ui.post(() -> {
+                    if (ms.isEmpty()) {
+                        newsAt = 0;
+                        if (newsList.getChildCount() == 0) recentEmpty.setText("Sin partidos próximos o sin conexión.");
+                        return;
+                    }
+                    showMatches(ms);
+                });
+            });
+            return;
+        }
         if (now - newsAt < 30 * 60 * 1000L) return;
         newsAt = now;
         io.execute(() -> {
@@ -695,6 +723,172 @@ public class HomeActivity extends Activity {
         }
         recentEmpty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
         if (hadFocus && newsList.getChildCount() > 0) newsList.getChildAt(0).findViewWithTag(TAG_CARD).requestFocus();
+    }
+
+    private String favCsv() {
+        return prefs.getString("teams", Matches.DEFAULT_FAVS);
+    }
+
+    private void chooseTeams() {
+        final String[] ids = Matches.TEAMS.keySet().toArray(new String[0]);
+        final String[] names = Matches.TEAMS.values().toArray(new String[0]);
+        final List<String> cur = Matches.favs(favCsv());
+        final boolean[] on = new boolean[ids.length];
+        for (int i = 0; i < ids.length; i++) on[i] = cur.contains(ids[i]);
+        new AlertDialog.Builder(this, pal.light ? android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
+                : android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Equipos favoritos")
+                .setMultiChoiceItems(names, on, (d, w, checked) -> on[w] = checked)
+                .setPositiveButton("Guardar", (d, w) -> {
+                    List<String> sel = new ArrayList<>();
+                    for (int i = 0; i < ids.length; i++) if (on[i]) sel.add(ids[i]);
+                    prefs.edit().putString("teams", TextUtils.join(",", sel)).apply();
+                    teamsRow.setText("Equipos favoritos (" + sel.size() + ")");
+                    newsAt = 0;
+                    newsList.removeAllViews();
+                    recentEmpty.setVisibility(View.VISIBLE);
+                    recentEmpty.setText("Buscando los partidos de tus equipos…");
+                    if ("matches".equals(cardMode)) refreshNews();
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    /** Recuadros de partido: escudo local · hora o marcador · escudo visitante; debajo, equipos y torneo. */
+    private void showMatches(List<Matches.Match> ms) {
+        boolean hadFocus = newsList.findFocus() != null;
+        newsList.removeAllViews();
+        liveShown = false;
+        SimpleDateFormat day = new SimpleDateFormat("EEE d MMM", ES);
+        final boolean h24 = DateFormat.is24HourFormat(this);
+        SimpleDateFormat hour = new SimpleDateFormat(h24 ? "H:mm" : "h:mm", ES);
+        Calendar today = Calendar.getInstance();
+        for (final Matches.Match m : ms) {
+            liveShown |= m.live();
+            final FrameLayout card = new FrameLayout(this);
+            card.setTag(TAG_CARD);
+            card.setFocusable(true);
+            card.setClipToOutline(true);
+            final int radius = px(12);
+            card.setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View v, Outline o) {
+                    o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
+                }
+            });
+            card.setBackgroundColor(pal.light ? 0xFFFFFFFF : 0x26FFFFFF);
+
+            LinearLayout face = new LinearLayout(this);
+            face.setGravity(Gravity.CENTER);
+            face.setPadding(px(6), 0, px(6), 0);
+            face.addView(crest(m.home), new LinearLayout.LayoutParams(px(36), px(36)));
+            LinearLayout mid = new LinearLayout(this);
+            mid.setOrientation(LinearLayout.VERTICAL);
+            mid.setGravity(Gravity.CENTER);
+            TextView big = text(m.live() || "post".equals(m.state) ? 18 : 14, pal.text, "sans-serif-medium");
+            TextView small = text(10, pal.sub, "sans-serif-medium");
+            Calendar when = Calendar.getInstance();
+            when.setTimeInMillis(m.time);
+            if (m.live()) {
+                big.setText(m.home.score + " - " + m.away.score);
+                small.setText("EN VIVO " + m.clock);
+                small.setTextColor(0xFFFF3B30);
+            } else {
+                // "2:00 pm" en una sola línea (el "p. m." del sistema se partía en dos).
+                big.setText(hour.format(when.getTime()) + (h24 ? "" : when.get(Calendar.HOUR_OF_DAY) < 12 ? " am" : " pm"));
+                big.setSingleLine(true);
+                boolean isToday = when.get(Calendar.YEAR) == today.get(Calendar.YEAR)
+                        && when.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR);
+                String d = isToday ? "Hoy" : day.format(when.getTime()).replace(".", "");
+                small.setText(Character.toUpperCase(d.charAt(0)) + d.substring(1));
+            }
+            big.setGravity(Gravity.CENTER_HORIZONTAL);
+            small.setGravity(Gravity.CENTER_HORIZONTAL);
+            mid.addView(big, new LinearLayout.LayoutParams(-1, -2));
+            mid.addView(small, new LinearLayout.LayoutParams(-1, -2));
+            face.addView(mid, new LinearLayout.LayoutParams(0, -2, 1f));
+            face.addView(crest(m.away), new LinearLayout.LayoutParams(px(36), px(36)));
+            card.addView(face, new FrameLayout.LayoutParams(-1, -1));
+
+            View sheen = new View(this);
+            GradientDrawable sh = new GradientDrawable();
+            sh.setCornerRadius(radius);
+            sh.setStroke(Math.max(1, px(1)), pal.light ? 0x26000000 : 0x80FFFFFF);
+            sheen.setBackground(sh);
+            sheen.setAlpha(0f);
+            card.addView(sheen, new FrameLayout.LayoutParams(-1, -1));
+
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setClipChildren(false);
+            col.addView(card, new LinearLayout.LayoutParams(px(150), px(84)));
+            TextView title = text(12, pal.text, "sans-serif-medium");
+            title.setText(m.home.name + " vs " + m.away.name);
+            title.setMaxLines(2);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(px(150), -2);
+            tl.topMargin = px(6);
+            col.addView(title, tl);
+            TextView meta = text(11, pal.sub, "sans-serif");
+            meta.setText(m.league);
+            col.addView(meta);
+
+            final int tint = crestColor(m.home.crest != null ? m.home.crest : m.away.crest);
+            card.setOnFocusChangeListener((v, has) -> {
+                v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).translationZ(has ? px(12) : 0)
+                        .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
+                sheen.animate().alpha(has ? 1f : 0f).setDuration(170).start();
+                if (has) animateGlow(tint);
+            });
+            card.setOnKeyListener((v, code, ev) -> {
+                if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN) {
+                    tabs[PAGE_HOME].requestFocus();
+                    return true;
+                }
+                return false;
+            });
+            card.setOnClickListener(v -> openLink(m.link));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+            lp.rightMargin = px(14);
+            newsList.addView(col, lp);
+        }
+        recentEmpty.setVisibility(ms.isEmpty() ? View.VISIBLE : View.GONE);
+        if (hadFocus && newsList.getChildCount() > 0) newsList.getChildAt(0).findViewWithTag(TAG_CARD).requestFocus();
+    }
+
+    private View crest(Matches.Team t) {
+        if (t.crest != null) {
+            ImageView img = new ImageView(this);
+            img.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            img.setImageBitmap(t.crest);
+            return img;
+        }
+        TextView initials = text(14, pal.sub, "sans-serif-medium");
+        initials.setGravity(Gravity.CENTER);
+        initials.setText(t.name.length() > 3 ? t.name.substring(0, 3).toUpperCase(ES) : t.name);
+        return initials;
+    }
+
+    /** Color medio del escudo, ignorando transparente y casi blanco/negro, para teñir el fondo. */
+    private static int crestColor(Bitmap b) {
+        if (b == null) return 0xFF8E8E93;
+        Bitmap s = Bitmap.createScaledBitmap(b, 12, 12, true);
+        long r = 0, g = 0, bl = 0, n = 0;
+        float[] hsv = new float[3];
+        for (int y = 0; y < 12; y++) {
+            for (int x = 0; x < 12; x++) {
+                int p = s.getPixel(x, y);
+                if (Color.alpha(p) < 128) continue;
+                Color.colorToHSV(p, hsv);
+                if (hsv[1] < 0.25f) continue;
+                r += Color.red(p);
+                g += Color.green(p);
+                bl += Color.blue(p);
+                n++;
+            }
+        }
+        s.recycle();
+        return n == 0 ? 0xFF8E8E93 : Color.rgb((int) (r / n), (int) (g / n), (int) (bl / n));
     }
 
     /** Abre la noticia en Silk (el navegador de Fire TV) o en el que haya. */
@@ -1030,6 +1224,23 @@ public class HomeActivity extends Activity {
     private void applyGlow(int c) {
         int rgb = c & 0x00FFFFFF;
         glowBg.setColors(new int[]{rgb | (pal.glowAlpha << 24), rgb | ((pal.glowAlpha / 4) << 24), 0x00000000});
+        // Todo el fondo se tiñe del color de la app, apagado: un poco arriba y más abajo.
+        if (rootBg != null) {
+            float[] hsv = new float[3];
+            Color.colorToHSV(c, hsv);
+            hsv[1] *= 0.75f;
+            int soft = Color.HSVToColor(hsv);
+            rootBg.setColors(pal.light
+                    ? new int[]{mix(pal.bgTop, soft, 0.10f), mix(pal.bgBottom, soft, 0.30f)}
+                    : new int[]{mix(pal.bgTop, soft, 0.16f), mix(pal.bgBottom, soft, 0.28f)});
+        }
+    }
+
+    private static int mix(int a, int b, float t) {
+        return Color.rgb(
+                Math.round(Color.red(a) + (Color.red(b) - Color.red(a)) * t),
+                Math.round(Color.green(a) + (Color.green(b) - Color.green(a)) * t),
+                Math.round(Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t));
     }
 
     private LinearLayout card() {
