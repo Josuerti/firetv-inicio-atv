@@ -1,4 +1,4 @@
-﻿package com.josue.atvhome;
+package com.josue.atvhome;
 
 import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
