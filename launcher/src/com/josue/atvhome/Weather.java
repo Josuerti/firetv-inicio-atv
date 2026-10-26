@@ -43,7 +43,8 @@ final class Weather {
             case "America/Argentina/Buenos_Aires": return new String[]{"Buenos Aires", "-34.60", "-58.38"};
             case "America/New_York": return new String[]{"Nueva York", "40.71", "-74.01"};
             case "Europe/Madrid": return new String[]{"Madrid", "40.42", "-3.70"};
-            default: return new String[]{"Milagro", "-2.13", "-79.59"}; // America/Guayaquil y resto
+            // America/Guayaquil y resto: Milagro, Guayas (geocoding de Open-Meteo)
+            default: return new String[]{"Milagro", "-2.13396", "-79.59337"};
         }
     }
 

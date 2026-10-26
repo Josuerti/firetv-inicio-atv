@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Outline;
 import android.graphics.Typeface;
@@ -303,8 +304,8 @@ public class HomeActivity extends Activity {
         // Tarjetas: Recientes (izquierda) y Clima (derecha).
         LinearLayout cards = new LinearLayout(this);
         cards.setClipChildren(false);
-        FrameLayout.LayoutParams cdl = new FrameLayout.LayoutParams(-1, px(196), Gravity.TOP);
-        cdl.setMargins(px(48), px(152), px(48), 0);
+        FrameLayout.LayoutParams cdl = new FrameLayout.LayoutParams(-1, px(206), Gravity.TOP);
+        cdl.setMargins(px(48), px(148), px(48), 0);
         home.addView(cards, cdl);
 
         LinearLayout recentCard = card();
@@ -320,11 +321,10 @@ public class HomeActivity extends Activity {
         rrl.topMargin = px(10);
         recentCard.addView(recentRow, rrl);
         newsList = new LinearLayout(this);
-        newsList.setOrientation(LinearLayout.VERTICAL);
         newsList.setClipChildren(false);
         newsList.setClipToPadding(false);
         LinearLayout.LayoutParams nll = new LinearLayout.LayoutParams(-1, -2);
-        nll.topMargin = px(4);
+        nll.topMargin = px(10);
         recentCard.addView(newsList, nll);
         recentEmpty = text(14, pal.sub, "sans-serif");
         recentEmpty.setText(newsMode ? "Cargando titulares…" : "Las apps que abras aparecerán aquí.");
@@ -437,7 +437,7 @@ public class HomeActivity extends Activity {
             rebuild();
         });
         TextView about = text(13, pal.sub, "sans-serif");
-        about.setText("Inicio ATV 2.1 · github.com/Josuerti/firetv-inicio-atv");
+        about.setText("Inicio ATV 2.2 · github.com/Josuerti/firetv-inicio-atv");
         LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-2, -2);
         al.topMargin = px(18);
         settingsList.addView(about, al);
@@ -490,7 +490,7 @@ public class HomeActivity extends Activity {
 
     private View pageFirst(int p) {
         if (p == PAGE_HOME) {
-            if (newsMode && newsList.getChildCount() > 0) return newsList.getChildAt(0);
+            if (newsMode && newsList.getChildCount() > 0) return newsList.getChildAt(0).findViewWithTag(TAG_CARD);
             if (!newsMode && recentRow.getChildCount() > 0) return recentRow.getChildAt(0).findViewWithTag(TAG_CARD);
             return dock.getChildCount() > 0 ? dock.getChildAt(0).findViewWithTag(TAG_CARD) : null;
         }
@@ -605,7 +605,7 @@ public class HomeActivity extends Activity {
         newsAt = now;
         io.execute(() -> {
             try {
-                final List<News.Item> items = News.fetch(3);
+                final List<News.Item> items = News.fetch(3, px(150));
                 ui.post(() -> showNews(items));
             } catch (Exception e) {
                 newsAt = 0; // sin red: se reintenta en el siguiente minuto
@@ -620,42 +620,77 @@ public class HomeActivity extends Activity {
         boolean hadFocus = newsList.findFocus() != null;
         newsList.removeAllViews();
         for (final News.Item it : items) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.VERTICAL);
-            row.setFocusable(true);
-            row.setPadding(px(12), px(4), px(12), px(4));
-            final TextView title = text(14, pal.text, "sans-serif-medium");
+            final FrameLayout card = new FrameLayout(this);
+            card.setTag(TAG_CARD);
+            card.setFocusable(true);
+            card.setClipToOutline(true);
+            final int radius = px(12);
+            card.setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View v, Outline o) {
+                    o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
+                }
+            });
+            final int tint;
+            if (it.photo != null) {
+                ImageView img = new ImageView(this);
+                img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                img.setImageBitmap(it.photo);
+                card.addView(img, new FrameLayout.LayoutParams(-1, -1));
+                Bitmap one = Bitmap.createScaledBitmap(it.photo, 1, 1, true);
+                tint = one.getPixel(0, 0);
+                one.recycle();
+            } else {
+                tint = 0xFF5A5A60;
+                card.setBackgroundColor(pal.light ? 0xFFE5E5EA : 0xFF2C2C2E);
+                TextView src = text(13, pal.sub, "sans-serif-medium");
+                src.setText(News.SOURCE);
+                card.addView(src, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+            }
+            View sheen = new View(this);
+            GradientDrawable sh = new GradientDrawable();
+            sh.setCornerRadius(radius);
+            sh.setStroke(Math.max(1, px(1)), 0x80FFFFFF);
+            sheen.setBackground(sh);
+            sheen.setAlpha(0f);
+            card.addView(sheen, new FrameLayout.LayoutParams(-1, -1));
+
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setClipChildren(false);
+            col.addView(card, new LinearLayout.LayoutParams(px(150), px(84)));
+            TextView title = text(12, pal.text, "sans-serif-medium");
             title.setText(it.title);
-            title.setSingleLine(true);
+            title.setMaxLines(2);
             title.setEllipsize(TextUtils.TruncateAt.END);
-            title.setMarqueeRepeatLimit(-1);
+            title.setLineSpacing(0, 0.95f);
+            LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(px(150), -2);
+            tl.topMargin = px(6);
+            col.addView(title, tl);
             TextView meta = text(11, pal.sub, "sans-serif");
             meta.setText(it.time > 0 ? Recents.ago(it.time) : News.SOURCE);
-            row.addView(title);
-            row.addView(meta);
-            row.setOnFocusChangeListener((v, has) -> {
-                v.setBackground(has ? round(pal.light ? 0xFFFFFFFF : 0x33FFFFFF, px(12)) : null);
-                v.setTranslationZ(has && pal.light ? px(6) : 0);
-                // Con foco el titular completo se desplaza; sin foco vuelve a cortarse con "…".
-                title.setEllipsize(has ? TextUtils.TruncateAt.MARQUEE : TextUtils.TruncateAt.END);
-                title.setSelected(has);
-                if (has) animateGlow(0xFF8E8E93);
+            col.addView(meta);
+
+            card.setOnFocusChangeListener((v, has) -> {
+                v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).translationZ(has ? px(12) : 0)
+                        .setDuration(170).setInterpolator(new DecelerateInterpolator()).start();
+                sheen.animate().alpha(has ? 1f : 0f).setDuration(170).start();
+                if (has) animateGlow(tint);
             });
-            row.setOnKeyListener((v, code, ev) -> {
-                if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN
-                        && newsList.indexOfChild(v) == 0) {
+            card.setOnKeyListener((v, code, ev) -> {
+                if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN) {
                     tabs[PAGE_HOME].requestFocus();
                     return true;
                 }
                 return false;
             });
-            row.setOnClickListener(v -> openLink(it.link));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-            lp.bottomMargin = px(2);
-            newsList.addView(row, lp);
+            card.setOnClickListener(v -> openLink(it.link));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+            lp.rightMargin = px(14);
+            newsList.addView(col, lp);
         }
         recentEmpty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
-        if (hadFocus && newsList.getChildCount() > 0) newsList.getChildAt(0).requestFocus();
+        if (hadFocus && newsList.getChildCount() > 0) newsList.getChildAt(0).findViewWithTag(TAG_CARD).requestFocus();
     }
 
     /** Abre la noticia en Silk (el navegador de Fire TV) o en el que haya. */

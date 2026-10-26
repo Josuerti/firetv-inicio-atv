@@ -175,7 +175,7 @@ Todo se hace con `pm disable-user --user 0`: **nada se borra** y se reactiva con
 |---|---|
 | Pestañas | **Inicio**, **Apps** y **Ajustes** arriba, como en tvOS. Al enfocar una pestaña cambia la página |
 | Saludo y reloj | "Buenos días / tardes / noches", la fecha en español y la hora arriba a la derecha |
-| 📰 Noticias | Tarjeta con los 3 últimos titulares de [El Universo](https://www.eluniverso.com) (RSS, solo texto, se lee en streaming y se corta). Con foco el titular se desplaza; OK lo abre en Silk. Se actualiza cada 30 minutos |
+| 📰 Noticias | Tarjeta con las 3 últimas noticias **con foto** de [El Universo](https://www.eluniverso.com) (RSS leído en streaming; cada foto se decodifica ya reducida, en RGB565, ~150 KB). El fondo se tiñe del color de la foto con foco; OK la abre en Silk. Se actualiza cada 30 minutos |
 | 🕘 Recientes | Alternativa a Noticias (en Ajustes): las 3 últimas apps que abriste y hace cuánto. Necesita el permiso de acceso al uso (`appops`) |
 | 🌤️ Clima | Tarjeta con temperatura, estado, máxima/mínima y las próximas 4 horas de la ciudad de tu zona horaria, con [Open-Meteo](https://open-meteo.com) (sin cuenta ni ubicación). Se actualiza cada 30 minutos |
 | Dock | Hasta 6 apps. Por defecto: Netflix, Disney+, YouTube, Crunchyroll, Stremio y Paramount+ |
