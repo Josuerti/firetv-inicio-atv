@@ -1,4 +1,4 @@
-package com.josue.atvhome;
+﻿package com.josue.atvhome;
 
 import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
@@ -104,8 +104,11 @@ public class HomeActivity extends Activity {
     private final View[] pages = new View[3];
     private int page = PAGE_HOME;
 
-    private TextView clock, greeting, date, wifiRow, themeRow, hiddenRow, recentEmpty;
-    private LinearLayout dock, recentRow, appsGrid, settingsList;
+    private TextView clock, greeting, date, wifiRow, themeRow, hiddenRow, recentEmpty, cardTitle;
+    private LinearLayout dock, recentRow, newsList, appsGrid, settingsList;
+    /** La tarjeta grande muestra noticias (por defecto) o apps recientes. */
+    private boolean newsMode;
+    private long newsAt;
     private ScrollView appsScroll;
     // Tarjeta de clima
     private TextView wCity, wIcon, wTemp, wDesc;
@@ -128,6 +131,7 @@ public class HomeActivity extends Activity {
         screenW = getResources().getDisplayMetrics().widthPixels;
         prefs = getSharedPreferences("atv", MODE_PRIVATE);
         pal = new Palette(!"dark".equals(prefs.getString("theme", "light")));
+        newsMode = !"recents".equals(prefs.getString("card", "news"));
         setContentView(buildChrome());
 
         IntentFilter pf = new IntentFilter();
@@ -163,7 +167,8 @@ public class HomeActivity extends Activity {
         updateClock();
         updateWifi();
         refreshWeather();
-        if (!all.isEmpty()) refreshRecents();
+        if (newsMode) refreshNews();
+        else if (!all.isEmpty()) refreshRecents();
         ensureHomeService();
     }
 
@@ -213,6 +218,7 @@ public class HomeActivity extends Activity {
             updateClock();
             updateWifi();
             refreshWeather();
+            if (newsMode) refreshNews();
         }
     };
 
@@ -304,18 +310,27 @@ public class HomeActivity extends Activity {
         LinearLayout recentCard = card();
         recentCard.setOrientation(LinearLayout.VERTICAL);
         recentCard.setClipChildren(false);
-        TextView rt = text(13, pal.sub, "sans-serif-medium");
-        rt.setText("Recientes");
-        recentCard.addView(rt);
+        cardTitle = text(13, pal.sub, "sans-serif-medium");
+        cardTitle.setText(newsMode ? "Noticias · " + News.SOURCE : "Recientes");
+        recentCard.addView(cardTitle);
         recentRow = new LinearLayout(this);
         recentRow.setClipChildren(false);
         recentRow.setClipToPadding(false);
         LinearLayout.LayoutParams rrl = new LinearLayout.LayoutParams(-1, -2);
         rrl.topMargin = px(10);
         recentCard.addView(recentRow, rrl);
+        newsList = new LinearLayout(this);
+        newsList.setOrientation(LinearLayout.VERTICAL);
+        newsList.setClipChildren(false);
+        newsList.setClipToPadding(false);
+        LinearLayout.LayoutParams nll = new LinearLayout.LayoutParams(-1, -2);
+        nll.topMargin = px(4);
+        recentCard.addView(newsList, nll);
         recentEmpty = text(14, pal.sub, "sans-serif");
-        recentEmpty.setText("Las apps que abras aparecerán aquí.");
+        recentEmpty.setText(newsMode ? "Cargando titulares…" : "Las apps que abras aparecerán aquí.");
         recentCard.addView(recentEmpty);
+        recentRow.setVisibility(newsMode ? View.GONE : View.VISIBLE);
+        newsList.setVisibility(newsMode ? View.VISIBLE : View.GONE);
         cards.addView(recentCard, new LinearLayout.LayoutParams(0, -1, 1f));
 
         LinearLayout weatherCard = card();
@@ -412,13 +427,17 @@ public class HomeActivity extends Activity {
             prefs.edit().putString("theme", pal.light ? "dark" : "light").apply();
             recreate();
         });
+        settingRow(newsMode ? "Tarjeta de inicio: noticias" : "Tarjeta de inicio: apps recientes", v -> {
+            prefs.edit().putString("card", newsMode ? "recents" : "news").apply();
+            recreate();
+        });
         hiddenRow = settingRow("Mostrar apps ocultas", v -> {
             prefs.edit().remove("hidden").apply();
             toast("Apps ocultas visibles otra vez");
             rebuild();
         });
         TextView about = text(13, pal.sub, "sans-serif");
-        about.setText("Inicio ATV 2.0 · github.com/Josuerti/firetv-inicio-atv");
+        about.setText("Inicio ATV 2.1 · github.com/Josuerti/firetv-inicio-atv");
         LinearLayout.LayoutParams al = new LinearLayout.LayoutParams(-2, -2);
         al.topMargin = px(18);
         settingsList.addView(about, al);
@@ -471,7 +490,8 @@ public class HomeActivity extends Activity {
 
     private View pageFirst(int p) {
         if (p == PAGE_HOME) {
-            if (recentRow.getChildCount() > 0) return recentRow.getChildAt(0).findViewWithTag(TAG_CARD);
+            if (newsMode && newsList.getChildCount() > 0) return newsList.getChildAt(0);
+            if (!newsMode && recentRow.getChildCount() > 0) return recentRow.getChildAt(0).findViewWithTag(TAG_CARD);
             return dock.getChildCount() > 0 ? dock.getChildAt(0).findViewWithTag(TAG_CARD) : null;
         }
         if (p == PAGE_APPS) {
@@ -579,7 +599,80 @@ public class HomeActivity extends Activity {
         if (target != null) target.requestFocus();
     }
 
+    private void refreshNews() {
+        long now = System.currentTimeMillis();
+        if (now - newsAt < 30 * 60 * 1000L) return;
+        newsAt = now;
+        io.execute(() -> {
+            try {
+                final List<News.Item> items = News.fetch(3);
+                ui.post(() -> showNews(items));
+            } catch (Exception e) {
+                newsAt = 0; // sin red: se reintenta en el siguiente minuto
+                ui.post(() -> {
+                    if (newsList.getChildCount() == 0) recentEmpty.setText("Sin conexión: los titulares volverán solos.");
+                });
+            }
+        });
+    }
+
+    private void showNews(List<News.Item> items) {
+        boolean hadFocus = newsList.findFocus() != null;
+        newsList.removeAllViews();
+        for (final News.Item it : items) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setFocusable(true);
+            row.setPadding(px(12), px(4), px(12), px(4));
+            final TextView title = text(14, pal.text, "sans-serif-medium");
+            title.setText(it.title);
+            title.setSingleLine(true);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            title.setMarqueeRepeatLimit(-1);
+            TextView meta = text(11, pal.sub, "sans-serif");
+            meta.setText(it.time > 0 ? Recents.ago(it.time) : News.SOURCE);
+            row.addView(title);
+            row.addView(meta);
+            row.setOnFocusChangeListener((v, has) -> {
+                v.setBackground(has ? round(pal.light ? 0xFFFFFFFF : 0x33FFFFFF, px(12)) : null);
+                v.setTranslationZ(has && pal.light ? px(6) : 0);
+                // Con foco el titular completo se desplaza; sin foco vuelve a cortarse con "…".
+                title.setEllipsize(has ? TextUtils.TruncateAt.MARQUEE : TextUtils.TruncateAt.END);
+                title.setSelected(has);
+                if (has) animateGlow(0xFF8E8E93);
+            });
+            row.setOnKeyListener((v, code, ev) -> {
+                if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN
+                        && newsList.indexOfChild(v) == 0) {
+                    tabs[PAGE_HOME].requestFocus();
+                    return true;
+                }
+                return false;
+            });
+            row.setOnClickListener(v -> openLink(it.link));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+            lp.bottomMargin = px(2);
+            newsList.addView(row, lp);
+        }
+        recentEmpty.setVisibility(items.isEmpty() ? View.VISIBLE : View.GONE);
+        if (hadFocus && newsList.getChildCount() > 0) newsList.getChildAt(0).requestFocus();
+    }
+
+    /** Abre la noticia en Silk (el navegador de Fire TV) o en el que haya. */
+    private void openLink(String url) {
+        if (url == null) return;
+        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        i.setPackage("com.amazon.cloud9");
+        try {
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            startSafe(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        }
+    }
+
     private void buildRecents() {
+        if (newsMode) return;
         recentRow.removeAllViews();
         Set<String> hidden = hidden();
         for (Recents.Item it : recents) {
@@ -674,7 +767,7 @@ public class HomeActivity extends Activity {
             }
             if (code == KeyEvent.KEYCODE_DPAD_UP && ev.getAction() == KeyEvent.ACTION_DOWN) {
                 boolean top = kind == KIND_RECENT
-                        || (kind == KIND_DOCK && recentRow.getChildCount() == 0)
+                        || (kind == KIND_DOCK && (newsMode ? newsList : recentRow).getChildCount() == 0)
                         || (kind == KIND_GRID && appsGrid.indexOfChild((View) col.getParent()) == 0);
                 if (top) {
                     tabs[page].requestFocus();

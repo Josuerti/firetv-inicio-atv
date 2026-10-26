@@ -85,7 +85,7 @@ adb shell pm grant com.josue.atvhome android.permission.WRITE_SECURE_SETTINGS   
 
 <table>
 <tr>
-<td width="50%"><img src="docs/inicio.png" alt="Inicio"><br><i>Inicio: saludo, apps recientes, clima por horas y dock.</i></td>
+<td width="50%"><img src="docs/inicio.png" alt="Inicio"><br><i>Inicio: saludo, noticias, clima por horas de Milagro y dock.</i></td>
 <td width="50%"><img src="docs/apps.png" alt="Apps"><br><i>Pestaña Apps: todas tus apps. La que tiene el foco crece y muestra su nombre.</i></td>
 </tr>
 <tr>
@@ -175,11 +175,12 @@ Todo se hace con `pm disable-user --user 0`: **nada se borra** y se reactiva con
 |---|---|
 | Pestañas | **Inicio**, **Apps** y **Ajustes** arriba, como en tvOS. Al enfocar una pestaña cambia la página |
 | Saludo y reloj | "Buenos días / tardes / noches", la fecha en español y la hora arriba a la derecha |
-| 🕘 Recientes | Tarjeta con las 3 últimas apps que abriste y hace cuánto ("Hace 5 min"). Necesita el permiso de acceso al uso (`appops`) |
+| 📰 Noticias | Tarjeta con los 3 últimos titulares de [El Universo](https://www.eluniverso.com) (RSS, solo texto, se lee en streaming y se corta). Con foco el titular se desplaza; OK lo abre en Silk. Se actualiza cada 30 minutos |
+| 🕘 Recientes | Alternativa a Noticias (en Ajustes): las 3 últimas apps que abriste y hace cuánto. Necesita el permiso de acceso al uso (`appops`) |
 | 🌤️ Clima | Tarjeta con temperatura, estado, máxima/mínima y las próximas 4 horas de la ciudad de tu zona horaria, con [Open-Meteo](https://open-meteo.com) (sin cuenta ni ubicación). Se actualiza cada 30 minutos |
 | Dock | Hasta 6 apps. Por defecto: Netflix, Disney+, YouTube, Crunchyroll, Stremio y Paramount+ |
 | Apps | Todas tus apps en orden alfabético, en cuadrícula de 6 |
-| Ajustes | Wi-Fi (con el nombre de la red), Ajustes de Fire TV, inicio de Amazon, **tema claro u oscuro** y apps ocultas |
+| Ajustes | Wi-Fi (con el nombre de la red), Ajustes de Fire TV, inicio de Amazon, **tema claro u oscuro**, **tarjeta de noticias o recientes** y apps ocultas |
 | Resplandor | Saca el color de cada logo y tiñe el fondo con una transición suave |
 | Limpieza | Oculta las herramientas internas de Fire OS que salen con icono genérico |
 | Se repara solo | Si Fire OS apaga el servicio del botón Inicio, Inicio ATV lo vuelve a encender al abrirse (con el permiso `WRITE_SECURE_SETTINGS`) |
@@ -283,7 +284,7 @@ Lo probamos. La lista del sistema (`content://android.media.tv/watch_next_progra
 
 <details><summary><b>¿El clima es de mi ciudad?</b></summary>
 
-Usa la ciudad principal de tu zona horaria (`America/Guayaquil` → Guayaquil, `America/Bogota` → Bogotá, etc.). Para otra ciudad, edita `cityFor` en `Weather.java`.
+Usa una ciudad según tu zona horaria: `America/Guayaquil` → **Milagro**, `America/Bogota` → Bogotá, etc. Para otra ciudad, edita `cityFor` en `Weather.java`.
 </details>
 
 <details><summary><b>¿Puedo cambiar las apps del dock?</b></summary>

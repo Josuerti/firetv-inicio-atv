@@ -33,7 +33,7 @@ final class Weather {
         this.day = day;
     }
 
-    /** {ciudad, latitud, longitud} para las zonas horarias más probables; si no, Guayaquil. */
+    /** {ciudad, latitud, longitud} para las zonas horarias más probables; si no, Milagro (Ecuador). */
     private static String[] cityFor(String tz) {
         switch (tz) {
             case "America/Bogota": return new String[]{"Bogotá", "4.71", "-74.07"};
@@ -43,7 +43,7 @@ final class Weather {
             case "America/Argentina/Buenos_Aires": return new String[]{"Buenos Aires", "-34.60", "-58.38"};
             case "America/New_York": return new String[]{"Nueva York", "40.71", "-74.01"};
             case "Europe/Madrid": return new String[]{"Madrid", "40.42", "-3.70"};
-            default: return new String[]{"Guayaquil", "-2.19", "-79.89"};
+            default: return new String[]{"Milagro", "-2.13", "-79.59"}; // America/Guayaquil y resto
         }
     }
 
